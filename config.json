@@ -1,7 +1,5 @@
 {
-  "latitude": "auto",
-  "longitude": "auto",
-  "timezone": "America/Toronto",
-  "fajr_angle": 18.0,
-  "isha_angle": 18.0
+    "fajr_angle": 18.0,
+    "isha_angle": 18.0,
+    "method": "NORTH_AMERICA"
 }
