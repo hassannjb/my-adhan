@@ -1,6 +1,6 @@
 {
-  "latitude": 43.5183,
-  "longitude": -79.8774,
+  "latitude": "auto",
+  "longitude": "auto",
   "timezone": "America/Toronto",
   "fajr_angle": 18.0,
   "isha_angle": 18.0
