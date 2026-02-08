@@ -2,17 +2,16 @@ import json
 import time
 from datetime import date, datetime, timedelta
 
-from mac_notifications import client
 import pygame
 import pytz
 from adhanpy.PrayerTimes import PrayerTimes
 from adhanpy.calculation.CalculationMethod import CalculationMethod
 from adhanpy.calculation.CalculationParameters import CalculationParameters
+from mac_notifications import client
 
 # 1. Load Configuration
 with open('config.json') as f:
     config = json.load(f)
-
 
 # --- UPDATED: Dynamic Location Logic (No hardcoded values) ---
 # --- UPDATED: Dynamic Location Logic (Requires sudo) ---
@@ -51,9 +50,12 @@ def get_location_from_system():
 raw_coordinates, timezone = get_location_from_system()
 # -------------------------------------------------------------
 
+method_str = config.get('method', 'NORTH_AMERICA')
+# Convert string to adhanpy enum
+method = getattr(CalculationMethod, method_str, CalculationMethod.NORTH_AMERICA)
 # 2. Setup Calculation Parameters
 params = CalculationParameters(
-    method=CalculationMethod.NORTH_AMERICA,
+    method=method,
     fajr_angle=config['fajr_angle'],
     isha_angle=config['isha_angle']
 )
@@ -78,7 +80,7 @@ def play_adhan():
     )
     try:
         pygame.mixer.init()
-        pygame.mixer.music.load('makkah_adhan.mp3')
+        pygame.mixer.music.load('lib/makkah_adhan.mp3')
         pygame.mixer.music.play()
         while pygame.mixer.music.get_busy():
             time.sleep(1)
