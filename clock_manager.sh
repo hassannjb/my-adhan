@@ -25,4 +25,5 @@ pip install PyQt6 requests pytz adhanpy pygame macos-notifications
 
 # --- 5. Run the Application ---
 echo "Starting Adhan Clock..."
+python3 adhan_clock.py &
 python3 gui_clock.py
