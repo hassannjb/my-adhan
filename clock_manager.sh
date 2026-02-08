@@ -1,75 +1,28 @@
 #!/bin/bash
 
-# Name of the python script
-APP_SCRIPT="adhan_clock.py"
-# File to store the process ID
-PID_FILE="adhan.pid"
-# Log file
-LOG_FILE="adhan.log"
+# --- 1. Check for Python 3 ---
+if ! command -v python3 &> /dev/null
+then
+    echo "Python 3 is not installed. Please install Python 3 and try again."
+    exit
+fi
 
-start() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null; then
-            echo "Adhaan clock is already running (PID: $PID)."
-            return
-        fi
-    fi
+# --- 2. Setup Virtual Environment (Portability) ---
+# This creates a folder to hold libraries so they don't
+# affect the user's main Python installation.
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+fi
 
-    echo "Starting Adhaan clock..."
-    nohup python3 "$APP_SCRIPT" > "$LOG_FILE" 2>&1 &
-    NEW_PID=$!
-    echo $NEW_PID > "$PID_FILE"
-    echo "Adhaan clock started with PID: $NEW_PID."
-}
+# --- 3. Activate Virtual Environment ---
+source venv/bin/activate
 
-stop() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null; then
-            echo "Stopping Adhaan clock (PID: $PID)..."
-            kill "$PID"
-            rm "$PID_FILE"
-            echo "Adhaan clock stopped."
-        else
-            echo "Adhaan clock was not running, but PID file existed. Removing PID file."
-            rm "$PID_FILE"
-        fi
-    else
-        echo "Adhaan clock is not running."
-    fi
-}
+# --- 4. Install Dependencies ---
+echo "Installing dependencies..."
+pip install --upgrade pip
+pip install PyQt6 requests pytz adhanpy pygame macos-notifications
 
-status() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null; then
-            echo "Adhaan clock is running (PID: $PID)."
-        else
-            echo "PID file exists, but Adhaan clock is not running."
-        fi
-    else
-        echo "Adhaan clock is not running."
-    fi
-}
-
-case "$1" in
-    start)
-        start
-        ;;
-    stop)
-        stop
-        ;;
-    restart)
-        stop
-        sleep 2
-        start
-        ;;
-    status)
-        status
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status}"
-        exit 1
-        ;;
-esac
+# --- 5. Run the Application ---
+echo "Starting Adhan Clock..."
+python3 gui_clock.py
