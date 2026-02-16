@@ -21,9 +21,8 @@ source venv/bin/activate
 # --- 4. Install Dependencies ---
 echo "Installing dependencies..."
 pip install --upgrade pip
-pip install PyQt6 requests pytz adhanpy pygame macos-notifications
+pip install pygame requests PyQt5 requests pytz adhanpy pygame macos-notifications
 
 # --- 5. Run the Application ---
 echo "Starting Adhan Clock..."
-python3 adhan_clock.py &
-python3 gui_clock.py
+python3.12 main.py

@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QDoubleSpinBox, QPushButton, QFormLayout, QComboBox
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QDoubleSpinBox, QPushButton, QFormLayout, QComboBox
 
 
 class SettingsDialog(QDialog):

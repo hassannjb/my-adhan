@@ -150,16 +150,31 @@ def main():
             ("Isha", pt.isha)
         ]
 
+        next_prayer = None
         for name, p_time in prayers:
-            # Check if current time is within 30 seconds of prayer time
-            if abs((p_time - now).total_seconds()) < 30:
-                # UPDATED: Added flush=True
-                print(f"Time for {name}!", flush=True)
-                play_adhan()
-                time.sleep(120)
+            if p_time > now:
+                next_prayer = (name, p_time)
                 break
 
-        time.sleep(10)
+        if next_prayer:
+            name, p_time = next_prayer
+            seconds = (p_time - now).total_seconds()
+            if seconds > 0:
+                print(f"Waiting {seconds:.2f}s for {name}...", flush=True)
+                time.sleep(seconds)
+            print(f"Time for {name}!", flush=True)
+            play_adhan()
+        else:
+            # Wait for tomorrow's Fajr
+            tomorrow = today + timedelta(days=1)
+            pt_next = get_times(tomorrow)
+            fajr_next = pt_next.fajr
+            seconds = (fajr_next - now).total_seconds()
+            if seconds > 0:
+                print(f"Waiting {seconds:.2f}s for tomorrow's Fajr...", flush=True)
+                time.sleep(seconds)
+            print("Time for Fajr!", flush=True)
+            play_adhan()
 
 
 if __name__ == "__main__":
