@@ -1,83 +1,83 @@
 ```python
-# tests/conftest.py
+# This file can be used for pytest fixtures and configuration.
+# For this project, we might need fixtures to create dummy adhan_times.json files.
 
 import pytest
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# Mock the pray.zone API to avoid making actual network requests during tests
-# We'll create a dummy prayer times file that the app can read.
+# Define the default prayer times file path used by the app
+DEFAULT_PRAYER_TIMES_FILE = "adhan_times.json"
 
-# Define a temporary directory for test files
-@pytest.fixture(scope="session")
-def tmp_test_dir(tmp_path_factory):
-    return tmp_path_factory.mktemp("adhan_test_data")
-
-# Fixture to create a dummy adhan_times.json file
 @pytest.fixture
-def mock_prayer_times_file(tmp_test_dir):
-    filepath = tmp_test_dir / "adhan_times.json"
-    dummy_times = {
+def setup_prayer_times_file(tmp_path):
+    """Fixture to create a dummy adhan_times.json file in a temporary directory."""
+    file_path = tmp_path / DEFAULT_PRAYER_TIMES_FILE
+    
+    # Default valid prayer times data
+    default_data = {
         "Fajr": "05:00",
-        "Sunrise": "06:30",
+        "Sunrise": "06:15",
         "Dhuhr": "13:00",
-        "Asr": "16:00",
-        "Sunset": "18:30",
-        "Maghrib": "18:30",
-        "Isha": "20:00",
-        "Imsak": "04:55",
-        "Midnight": "00:45"
-    }
-    with open(filepath, 'w') as f:
-        json.dump(dummy_times, f, indent=4)
-    return filepath
-
-# Fixture to create a malformed adhan_times.json file
-@pytest.fixture
-def malformed_prayer_times_file(tmp_test_dir):
-    filepath = tmp_test_dir / "malformed_adhan_times.json"
-    malformed_times = {
-        "Fajr": "05:00",
-        "Dhuhr": "13:00",
-        # Missing Asr, Maghrib, Isha
-        "Sunrise": "06:30",
-        "Sunset": "18:30"
-    }
-    with open(filepath, 'w') as f:
-        json.dump(malformed_times, f, indent=4)
-    return filepath
-
-# Fixture to create a JSONDecodeError file
-@pytest.fixture
-def invalid_json_file(tmp_test_dir):
-    filepath = tmp_test_dir / "invalid.json"
-    with open(filepath, 'w') as f:
-        f.write("{'Fajr': '05:00'") # Incomplete JSON
-    return filepath
-
-# Fixture to create a file with invalid time format for a prayer
-@pytest.fixture
-def invalid_time_format_file(tmp_test_dir):
-    filepath = tmp_test_dir / "invalid_time.json"
-    invalid_times = {
-        "Fajr": "05:00",
-        "Dhuhr": "13:00",
-        "Asr": "invalid-time", # Invalid format
-        "Maghrib": "18:30",
+        "Asr": "16:30",
+        "Maghrib": "18:45",
         "Isha": "20:00"
     }
-    with open(filepath, 'w') as f:
-        json.dump(invalid_times, f, indent=4)
-    return filepath
+    
+    with open(file_path, 'w') as f:
+        json.dump(default_data, f, indent=4)
+    
+    # Return the path to the created file
+    return file_path
 
-# Fixture to mock the current time for specific tests
 @pytest.fixture
-def mock_datetime_now(monkeypatch):
-    # We can't directly mock datetime.now() for all cases, as it's often used internally.
-    # Instead, we'll provide a way to *set* the current time for specific test scenarios.
-    # For tests that need to simulate a specific time, we'll pass it as an argument
-    # to the method being tested.
-    # If a test needs to mock datetime.now(), it can do so within the test function.
-    pass
+def setup_malformed_prayer_times_file(tmp_path):
+    """Fixture to create a malformed adhan_times.json file."""
+    file_path = tmp_path / DEFAULT_PRAYER_TIMES_FILE
+    malformed_data = {
+        "Fajr": "05:00",
+        "Dhuhr": "13:00",
+        "Asr": "16:30" # Missing Maghrib and Isha
+    }
+    with open(file_path, 'w') as f:
+        json.dump(malformed_data, f, indent=4)
+    return file_path
+
+@pytest.fixture
+def setup_invalid_time_format_file(tmp_path):
+    """Fixture to create a file with invalid time formats."""
+    file_path = tmp_path / DEFAULT_PRAYER_TIMES_FILE
+    invalid_data = {
+        "Fajr": "05:00",
+        "Sunrise": "invalid-time",
+        "Dhuhr": "13:00",
+        "Asr": "16:30",
+        "Maghrib": "18:45",
+        "Isha": "20:00"
+    }
+    with open(file_path, 'w') as f:
+        json.dump(invalid_data, f, indent=4)
+    return file_path
+
+@pytest.fixture
+def setup_empty_prayer_times_file(tmp_path):
+    """Fixture to create an empty adhan_times.json file."""
+    file_path = tmp_path / DEFAULT_PRAYER_TIMES_FILE
+    with open(file_path, 'w') as f:
+        json.dump({}, f, indent=4)
+    return file_path
+
+# Helper to set the current directory for tests that might rely on relative paths
+@pytest.fixture(autouse=True)
+def set_cwd(tmp_path):
+    original_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    yield
+    os.chdir(original_cwd)
+
 ```
+
+**2. Add Tests for `main.py`**
+
+This involves testing the `AdhanClockApp` class, specifically its `_load_prayer_times` and `get_next_prayer_info` methods. We'll use the fixtures defined in `conftest.py` to simulate different file states.
