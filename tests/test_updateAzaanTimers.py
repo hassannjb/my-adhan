@@ -1,357 +1,271 @@
 ```python
 import pytest
 import requests
-from datetime import datetime, timedelta
 import json
+from datetime import datetime
 import os
 
-# Import the functions to be tested
+# Assuming updateAzaanTimers.py is in the root directory
 from updateAzaanTimers import fetch_prayer_times, save_prayer_times, main
 
-# Mock the requests library to control external API calls
-@pytest.fixture(autouse=True)
-def mock_requests(monkeypatch):
-    """Mocks the requests.get function."""
-    mock_response = requests.Response()
-    mock_response.status_code = 200
-    
-    def mock_get(*args, **kwargs):
-        # Simulate different responses based on URL or parameters
-        url = args[0]
-        params = kwargs.get('params', {})
+# --- Mocking API requests ---
+MOCK_API_URL = "https://api.pray.zone/v2/times/today.json"
 
-        if url == "https://api.pray.zone/v2/times/today.json":
-            city = params.get("city")
-            country = params.get("country")
+# Dummy response from the API
+DUMMY_API_RESPONSE = {
+    "results": {
+        "settings": {
+            "location": {
+                "city": "London",
+                "country": "UK"
+            },
+            "method": 2
+        },
+        "datetime": [
+            {
+                "date": {
+                    "readable": "27 Oct 2023",
+                    "timestamp": "1698374400"
+                },
+                "times": {
+                    "Fajr": "05:00",
+                    "Sunrise": "06:30",
+                    "Dhuhr": "13:00",
+                    "Asr": "16:00",
+                    "Sunset": "18:30",
+                    "Maghrib": "18:30",
+                    "Isha": "20:00",
+                    "Imsak": "04:55",
+                    "Midnight": "00:45"
+                }
+            }
+        ]
+    }
+}
 
-            if city == "London" and country == "UK":
-                mock_response._content = json.dumps({
-                    "results": {
-                        "datetime": [
-                            {
-                                "times": {
-                                    "Fajr": "05:00",
-                                    "Sunrise": "06:30",
-                                    "Dhuhr": "13:00",
-                                    "Asr": "16:00",
-                                    "Sunset": "18:30",
-                                    "Maghrib": "18:30",
-                                    "Isha": "20:00"
-                                },
-                                "date": "2023-10-27"
-                            }
-                        ]
-                    }
-                }).encode('utf-8')
-            elif city == "InvalidCity" and country == "InvalidCountry":
-                # Simulate an empty or malformed response for specific inputs
-                mock_response._content = json.dumps({
-                    "results": {
-                        "datetime": [] # Empty datetime list
-                    }
-                }).encode('utf-8')
-            elif city == "ErrorCity":
-                 # Simulate a response indicating an error or bad parsing needed
-                mock_response._content = json.dumps({
-                    "results": {
-                        "datetime": [
-                            {
-                                "times": {
-                                    "Fajr": "05:00",
-                                    "Sunrise": "06:30",
-                                    "Dhuhr": "13:00",
-                                    "Asr": "16:00",
-                                    "Sunset": "18:30",
-                                    "Maghrib": "18:30",
-                                    "Isha": "20:00",
-                                    "Duhr": "13:00" # Extra field to test parsing
-                                }
-                            }
-                        ]
-                    }
-                }).encode('utf-8')
-            else:
-                 mock_response._content = json.dumps({
-                    "error": "City not found"
-                }).encode('utf-8')
-                mock_response.status_code = 404
-
-        else:
-            # Default for any other URL
-            mock_response._content = b'{"message": "Not found"}'
-            mock_response.status_code = 404
-            
-        return mock_response
-
-    monkeypatch.setattr(requests, "get", mock_get)
+# Expected parsed prayer times dictionary
+EXPECTED_PARSED_TIMES = {
+    "Fajr": "05:00",
+    "Sunrise": "06:30",
+    "Dhuhr": "13:00",
+    "Asr": "16:00",
+    "Sunset": "18:30",
+    "Maghrib": "18:30",
+    "Isha": "20:00",
+    "Imsak": "04:55",
+    "Midnight": "00:45"
+}
 
 # --- Tests for fetch_prayer_times ---
 
-def test_fetch_prayer_times_success(mock_requests):
-    """Test successful fetching of prayer times."""
+def test_fetch_prayer_times_success(requests_mock, tmp_test_dir):
+    """Test successfully fetching prayer times from the API."""
+    requests_mock.get(MOCK_API_URL, json=DUMMY_API_RESPONSE)
     city = "London"
     country = "UK"
     method = "2"
-    
-    times = fetch_prayer_times(city, country, method)
-    
-    expected_times = {
-        "Fajr": "05:00",
-        "Sunrise": "06:30",
-        "Dhuhr": "13:00",
-        "Asr": "16:00",
-        "Sunset": "18:30",
-        "Maghrib": "18:30",
-        "Isha": "20:00"
+
+    prayer_times = fetch_prayer_times(city, country, method)
+
+    assert prayer_times == EXPECTED_PARSED_TIMES
+    assert requests_mock.called_once
+    assert requests_mock.last_request.url == MOCK_API_URL
+    assert requests_mock.last_request.qs == {
+        'city': [city],
+        'country': [country],
+        'method': [method]
     }
-    assert times == expected_times
 
-def test_fetch_prayer_times_api_error(mock_requests):
-    """Test fetching when the API returns an error status code."""
-    city = "ErrorCity" # This city triggers a 404 in the mock
-    country = "UK"
-    method = "2"
-    
-    times = fetch_prayer_times(city, country, method)
-    assert times is None
-
-def test_fetch_prayer_times_request_exception(monkeypatch):
-    """Test fetching when a requests.exceptions.RequestException occurs."""
-    def raise_exception(*args, **kwargs):
-        raise requests.exceptions.RequestException("Network error")
-    
-    monkeypatch.setattr(requests, "get", raise_exception)
-    
+def test_fetch_prayer_times_api_error(requests_mock):
+    """Test fetching prayer times when the API returns an error."""
+    requests_mock.get(MOCK_API_URL, status_code=500)
     city = "London"
     country = "UK"
     method = "2"
-    
-    times = fetch_prayer_times(city, country, method)
-    assert times is None
 
-def test_fetch_prayer_times_malformed_response_structure(mock_requests):
-    """Test fetching when the API response structure is not as expected."""
-    city = "InvalidCity" # This city returns an empty datetime list in the mock
+    prayer_times = fetch_prayer_times(city, country, method)
+
+    assert prayer_times is None
+    assert requests_mock.called_once
+
+def test_fetch_prayer_times_network_error(requests_mock):
+    """Test fetching prayer times when a network error occurs."""
+    requests_mock.get(MOCK_API_URL, exc=requests.exceptions.ConnectionError)
+    city = "London"
     country = "UK"
     method = "2"
-    
-    times = fetch_prayer_times(city, country, method)
-    assert times is None
 
-def test_fetch_prayer_times_missing_keys_in_response(mock_requests):
-    """Test fetching when specific keys are missing in the JSON response."""
-    city = "ErrorCity" # Mocked to return an extra key, but also test for missing ones if needed
+    prayer_times = fetch_prayer_times(city, country, method)
+
+    assert prayer_times is None
+    assert requests_mock.called_once
+
+def test_fetch_prayer_times_invalid_response_structure(requests_mock):
+    """Test fetching prayer times with an unexpected response structure."""
+    invalid_response = {"message": "Something went wrong"}
+    requests_mock.get(MOCK_API_URL, json=invalid_response)
+    city = "London"
     country = "UK"
     method = "2"
-    
-    # Modify mock to explicitly simulate missing expected keys IF NEEDED
-    # For now, mock_requests handles a case that might lead to parsing issues if not careful
-    # The current mock for "ErrorCity" returns 'Duhr' instead of 'Dhuhr', but 'Dhuhr' is in the expected output.
-    # Let's adjust the mock to be more precise if we want to test missing keys
-    
-    # If the API returns something like:
-    # {"results": {"datetime": [{"times": {"Fajr": "05:00"}}]} }
-    # This test ensures it returns None if essential keys are missing.
-    
-    # The current `mock_requests` for "ErrorCity" will return a dict containing Dhuhr,
-    # and the `fetch_prayer_times` should gracefully handle it by returning the correct structure.
-    # Let's ensure the `fetch_prayer_times` logic is robust for this.
-    
-    times = fetch_prayer_times(city, country, method)
-    # The current implementation correctly extracts Dhuhr.
-    # If the API returned JUST {"results": {}}, `fetch_prayer_times` would return None.
-    # Let's assume the API will at least return the structure, but we test edge cases.
-    
-    # This test actually passes with the current mock because the expected structure is there.
-    # To test truly missing *expected* keys like 'Fajr', the mock needs adjustment.
-    # Let's re-evaluate the mock: The "ErrorCity" mock returns a valid structure with *extra* data.
-    # A test for MISSING expected keys would look like this:
-    
-    # Re-mocking to test missing keys explicitly
-    def mock_get_missing_keys(url, params, timeout):
-        if url == "https://api.pray.zone/v2/times/today.json" and params.get("city") == "MissingKeysCity":
-            mock_response_missing = requests.Response()
-            mock_response_missing.status_code = 200
-            mock_response_missing._content = json.dumps({
-                "results": {
-                    "datetime": [
-                        {
-                            "times": {
-                                # Missing Fajr, Dhuhr, Asr, Maghrib, Isha
-                                "Sunrise": "06:30"
-                            }
-                        }
-                    ]
-                }
-            }).encode('utf-8')
-            return mock_response_missing
-        # Fallback to the original mock_get if not this specific case
-        return mock_requests(url, params, timeout=timeout) # This line is conceptual, relies on monkeypatching
 
-    # To properly test this, we need a more dynamic mock or a separate monkeypatching setup per test.
-    # For simplicity, let's assume the primary logic of `fetch_prayer_times` handles standard errors well.
-    # The `main` function test below will indirectly cover issues if `fetch_prayer_times` returns None.
-    pass # Placeholder for more complex missing key test if needed
+    prayer_times = fetch_prayer_times(city, country, method)
 
+    assert prayer_times is None
+    assert requests_mock.called_once
+
+def test_fetch_prayer_times_empty_datetime(requests_mock):
+    """Test fetching prayer times when datetime list is empty."""
+    empty_datetime_response = {
+        "results": {
+            "settings": {},
+            "datetime": [] # Empty list
+        }
+    }
+    requests_mock.get(MOCK_API_URL, json=empty_datetime_response)
+    city = "London"
+    country = "UK"
+    method = "2"
+
+    prayer_times = fetch_prayer_times(city, country, method)
+
+    assert prayer_times is None
+    assert requests_mock.called_once
 
 # --- Tests for save_prayer_times ---
 
-def test_save_prayer_times_success(tmp_path):
-    """Test successful saving of prayer times to a file."""
-    filepath = tmp_path / "test_save.json"
-    prayer_times = {
-        "Fajr": "05:00",
-        "Dhuhr": "13:00"
-    }
-    
-    result = save_prayer_times(str(filepath), prayer_times)
-    
-    assert result is True
+def test_save_prayer_times_success(tmp_test_dir):
+    """Test successfully saving prayer times to a file."""
+    filepath = tmp_test_dir / "test_save.json"
+    success = save_prayer_times(filepath, EXPECTED_PARSED_TIMES)
+
+    assert success is True
     assert os.path.exists(filepath)
     with open(filepath, 'r') as f:
         saved_data = json.load(f)
-    assert saved_data == prayer_times
+    assert saved_data == EXPECTED_PARSED_TIMES
 
-def test_save_prayer_times_no_data():
-    """Test saving when the prayer_times dictionary is empty or None."""
-    # Note: The function checks for falsy `prayer_times`, so None or {} should work.
-    result_none = save_prayer_times("dummy.json", None)
-    assert result_none is False
+def test_save_prayer_times_empty_data():
+    """Test saving when prayer_times dictionary is empty or None."""
+    # save_prayer_times should return False and print a message
+    # We can't easily capture stdout here for the print message, but check return value
+    # and file creation.
+    # For this specific function, it checks `if not prayer_times:` which handles None and {}
+    assert save_prayer_times("dummy.json", None) is False
+    assert save_prayer_times("dummy.json", {}) is False
+
+def test_save_prayer_times_io_error(tmp_test_dir):
+    """Test saving prayer times when an IO error occurs."""
+    # Create a directory that we cannot write to (e.g., root directory if permissions deny)
+    # This is hard to reliably mock. For now, let's assume a path that might cause error if directory doesn't exist.
+    # A simpler way is to try writing to a read-only location, but that depends on OS.
+    # For robustness, we'll test creating a file in a valid location.
+    # If the `os.makedirs` fails, it will raise an exception.
+    # The current implementation handles IOError from open()
     
-    result_empty = save_prayer_times("dummy.json", {})
-    assert result_empty is False
-
-def test_save_prayer_times_io_error(tmp_path):
-    """Test saving when an IOError occurs (e.g., permission denied)."""
-    # Create a directory and try to write a file with no write permissions
-    # This is difficult to simulate reliably across all OS without root privileges.
-    # A simpler approach is to mock os.makedirs and open.
+    # Mock os.makedirs to fail for a specific path if needed, but it's complex.
+    # Instead, let's rely on the fact that open() can raise IOError.
+    # We'll test the case where the directory itself is problematic.
     
-    # Let's simulate an error during file writing for demonstration
-    def mock_open_for_write(*args, **kwargs):
-        # This mock will raise an IOError when called to open a file for writing
-        raise IOError("Permission denied")
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(os.path, "makedirs", lambda *args, **kwargs: None) # Mock makedirs to do nothing
-        mp.setattr(open, "__new__", mock_open_for_write, raising=False) # Mock open to raise error
-
-        filepath = tmp_path / "restricted_dir" / "restricted_file.json"
-        prayer_times = {"Fajr": "05:00"}
-        
-        result = save_prayer_times(str(filepath), prayer_times)
-        
-        assert result is False
-        assert not os.path.exists(filepath.parent) # Ensure directory wasn't created if mock was more complex
-        # Note: The mock above prevents os.makedirs from being called, so the parent dir won't exist.
-
+    # For example, trying to save to a path like '/root/test.json' without root privileges.
+    # This test might fail on systems where the user has write access to root.
+    # A better approach might be to mock `open` and `os.makedirs` if a direct IO error is needed.
+    
+    # For simplicity, let's assume the path is valid but the `open` call might fail for other reasons
+    # like disk full, etc. The test can't easily simulate that.
+    # We'll check that it returns False and doesn't crash.
+    
+    # This test is more about ensuring the `except IOError` block is hit.
+    # We can't easily force an IOError from `open` or `os.makedirs` in a portable way.
+    # Let's assume the `try` block *would* raise an `IOError` if it happened.
+    # The function handles it by returning False.
+    filepath = "/nonexistent_directory_for_test/adhan_times.json" # This path should cause an error for os.makedirs
+    success = save_prayer_times(filepath, EXPECTED_PARSED_TIMES)
+    assert success is False
+    # Check if directory creation failed, which implies `os.makedirs` failed.
+    # `os.path.dirname(filepath)` would be `/nonexistent_directory_for_test`.
+    # If it exists and is not a dir, or if permissions prevent creation.
 
 # --- Tests for main CLI function ---
 
-@pytest.fixture
-def mock_cli_args(monkeypatch):
-    """Helper to mock command-line arguments for main()."""
-    def mock_parse_args(self):
-        # This will be replaced by specific argument sets in test cases
-        return argparse.Namespace() 
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", mock_parse_args)
-
-def test_main_successful_update(mock_requests, mock_cli_args, monkeypatch, tmp_path):
-    """Test the main function when everything succeeds."""
-    # Mock argparse.parse_args to return specific arguments
-    def mock_parse_args_success(self):
-        return argparse.Namespace(city="London", country="UK", method="2", output="test_output.json")
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", mock_parse_args_success)
+def test_main_success(requests_mock, tmp_test_dir, monkeypatch, capsys):
+    """Test the main function when all operations succeed."""
+    requests_mock.get(MOCK_API_URL, json=DUMMY_API_RESPONSE)
+    output_filepath = tmp_test_dir / "test_output.json"
     
-    # Ensure the output file is in a temporary directory
-    output_filepath = tmp_path / "test_output.json"
+    # Mock sys.argv to simulate command-line arguments
+    test_args = [
+        "updateAzaanTimers.py",
+        "--city", "London",
+        "--country", "UK",
+        "--output", str(output_filepath)
+    ]
+    monkeypatch.setattr("sys.argv", test_args)
     
-    # We need to ensure the mock_requests returns the data correctly for the mock_parse_args
-    # (This is handled by the autouse fixture at the top of the file)
-
-    # Save the original file creation logic
-    original_save_prayer_times = save_prayer_times
-    
-    # Spy on save_prayer_times to check if it's called with correct data
-    saved_filepath = None
-    saved_times = None
-    def spy_save_prayer_times(filepath, prayer_times):
-        nonlocal saved_filepath, saved_times
-        saved_filepath = filepath
-        saved_times = prayer_times
-        return True # Simulate success
-
-    monkeypatch.setattr(updateAzaanTimers, "save_prayer_times", spy_save_prayer_times)
-
-    # Run the main function
     main()
     
-    # Assertions
-    assert saved_filepath == str(output_filepath)
-    expected_times = {
-        "Fajr": "05:00",
-        "Sunrise": "06:30",
-        "Dhuhr": "13:00",
-        "Asr": "16:00",
-        "Sunset": "18:30",
-        "Maghrib": "18:30",
-        "Isha": "20:00"
-    }
-    assert saved_times == expected_times
+    captured = capsys.readouterr()
+    assert f"Fetching prayer times for London, UK using method 2..." in captured.out
+    assert f"Prayer times saved to {output_filepath}" in captured.out
     
-    # Verify the actual file was created if we didn't spy but let it run
-    # (If using spy, this part is optional but good for validation)
     assert os.path.exists(output_filepath)
     with open(output_filepath, 'r') as f:
-        content = json.load(f)
-    assert content == expected_times
+        saved_data = json.load(f)
+    assert saved_data == EXPECTED_PARSED_TIMES
 
-
-def test_main_fetch_failure(mock_requests, mock_cli_args, monkeypatch, capsys):
+def test_main_fetch_error(requests_mock, monkeypatch, capsys):
     """Test the main function when fetching prayer times fails."""
-    # Mock argparse.parse_args to simulate a failure scenario (e.g., city not found)
-    def mock_parse_args_fetch_fail(self):
-        return argparse.Namespace(city="NonExistentCity", country="XYZ", method="2", output="failed_output.json")
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", mock_parse_args_fetch_fail)
+    requests_mock.get(MOCK_API_URL, exc=requests.exceptions.RequestException("Simulated error"))
     
-    # Spy on save_prayer_times to ensure it's NOT called
-    save_called = False
-    def no_save_prayer_times(*args, **kwargs):
-        nonlocal save_called
-        save_called = True
-        return False # Indicate failure if somehow called
-
-    monkeypatch.setattr(updateAzaanTimers, "save_prayer_times", no_save_prayer_times)
+    test_args = [
+        "updateAzaanTimers.py",
+        "--city", "London",
+        "--country", "UK"
+    ]
+    monkeypatch.setattr("sys.argv", test_args)
     
-    # Run the main function
     main()
     
-    # Assertions
-    assert not save_called
-    captured = capsys.readouterr()
-    assert "Fetching prayer times for NonExistentCity, XYZ using method 2..." in captured.out
-    assert "Error fetching prayer times for NonExistentCity, XYZ: 404 Client Error: Not Found for url:" in captured.out # Or similar error message from requests
-    assert "Failed to retrieve or save prayer times." in captured.out
-
-def test_main_save_failure(mock_requests, mock_cli_args, monkeypatch, capsys):
-    """Test the main function when saving prayer times fails."""
-    # Mock argparse.parse_args for a successful fetch but failed save
-    def mock_parse_args_save_fail(self):
-        return argparse.Namespace(city="London", country="UK", method="2", output="failed_save.json")
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", mock_parse_args_save_fail)
-    
-    # Mock save_prayer_times to return False (simulate failure)
-    def mock_save_prayer_times_fail(*args, **kwargs):
-        print("Simulating save failure.")
-        return False
-    monkeypatch.setattr(updateAzaanTimers, "save_prayer_times", mock_save_prayer_times_fail)
-    
-    # Run the main function
-    main()
-    
-    # Assertions
     captured = capsys.readouterr()
     assert "Fetching prayer times for London, UK using method 2..." in captured.out
-    assert "Simulating save failure." in captured.out
+    assert "Error fetching prayer times for London, UK: Simulated error" in captured.out
     assert "Failed to retrieve or save prayer times." in captured.out
+
+def test_main_save_error(requests_mock, monkeypatch, capsys):
+    """Test the main function when saving prayer times fails."""
+    requests_mock.get(MOCK_API_URL, json=DUMMY_API_RESPONSE)
+    
+    # Attempt to save to a directory where we don't have write permissions
+    # This is OS dependent, so we'll simulate by providing a path that `save_prayer_times` might fail on.
+    # For demonstration, we'll make it return False.
+    # A more robust test would mock os.makedirs and open to raise IOError.
+    
+    # We'll mock `save_prayer_times` to always return False for this test case
+    # to isolate the failure path for saving.
+    
+    # Mocking the `save_prayer_times` function itself to simulate failure
+    # and ensure the correct messages are printed.
+    original_save_prayer_times = updateAzaanTimers.save_prayer_times
+    def mock_save_failure(filepath, prayer_times):
+        print(f"Error saving prayer times to file '{filepath}': Simulated IO Error")
+        return False
+    
+    monkeypatch.setattr("updateAzaanTimers.save_prayer_times", mock_save_failure)
+
+    test_args = [
+        "updateAzaanTimers.py",
+        "--city", "London",
+        "--country", "UK"
+    ]
+    monkeypatch.setattr("sys.argv", test_args)
+    
+    main()
+    
+    captured = capsys.readouterr()
+    assert "Fetching prayer times for London, UK using method 2..." in captured.out
+    assert "Error saving prayer times to file 'adhan_times.json': Simulated IO Error" in captured.out
+    assert "Failed to retrieve or save prayer times." in captured.out
+
+    # Restore the original function after the test
+    monkeypatch.undo()
+
 ```
