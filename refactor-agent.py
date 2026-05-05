@@ -12,7 +12,7 @@ REPO_PATH = "/Users/hassan.najeeb/PycharmProjects/my-adhan"
 BRANCH_NAME = "ai/agent-refactor"
 MAX_ITERS = 3
 TEST_DIR = "tests"
-MODEL_NAME = "models/gemini-2.5-flash"
+MODEL_NAME = "models/gemini-2.5-flash-lite"
 
 
 # Tools
