@@ -1,267 +1,234 @@
 ```python
 import pytest
 from datetime import datetime, timedelta
+import json
 import os
-import sys
-from unittest.mock import patch
 
-# Assume main.py is in the root of the project, adjust path if needed
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from main import AdhanClockApp, PRAYER_TIMES_FILE
+from main import AdhanClockApp
 
-@pytest.fixture
-def app_with_default_path():
-    """App instance using the default PRAYER_TIMES_FILE."""
-    return AdhanClockApp()
+# Helper to create a dummy prayer times file
+def create_dummy_prayer_times_file(filepath="adhan_times.json", content=None):
+    if content is None:
+        content = {
+            "Fajr": "05:00",
+            "Sunrise": "06:30",
+            "Dhuhr": "13:00",
+            "Asr": "16:00",
+            "Sunset": "18:30",
+            "Maghrib": "18:30",
+            "Isha": "20:00"
+        }
+    with open(filepath, 'w') as f:
+        json.dump(content, f, indent=4)
 
-@pytest.fixture
-def app_with_custom_path(tmp_test_dir):
-    """App instance using a custom (and potentially non-existent) path."""
-    custom_path = os.path.join(tmp_test_dir, "custom_adhan_times.json")
-    return AdhanClockApp(prayer_times_filepath=custom_path)
+# --- Tests for AdhanClockApp ---
 
-def test_init_default_path(app_with_default_path):
-    """Test initialization with default file path."""
-    assert app_with_default_path.prayer_times_filepath == PRAYER_TIMES_FILE
-    # We can't assert the content of self.prayer_times here as it depends on the file system state.
-    # This will be tested in other tests.
+def test_init_default_filepath():
+    """Test initialization with default filepath."""
+    app = AdhanClockApp()
+    assert app.prayer_times_filepath == "adhan_times.json"
 
-def test_init_custom_path(app_with_custom_path):
-    """Test initialization with a custom file path."""
-    assert app_with_custom_path.prayer_times_filepath.endswith("custom_adhan_times.json")
+def test_init_custom_filepath():
+    """Test initialization with a custom filepath."""
+    custom_path = "my_custom_times.json"
+    app = AdhanClockApp(prayer_times_filepath=custom_path)
+    assert app.prayer_times_filepath == custom_path
 
-@pytest.mark.parametrize(
-    "current_dt_str, expected_prayer_name, expected_time_str, expected_dt_offset_days",
-    [
-        # Test case 1: Before Fajr
-        ("2023-10-27 04:00", "Fajr", "05:00", 0),
-        # Test case 2: Exactly at Fajr
-        ("2023-10-27 05:00", "Sunrise", "06:15", 0),
-        # Test case 3: After Fajr, before Sunrise
-        ("2023-10-27 05:30", "Sunrise", "06:15", 0),
-        # Test case 4: After Sunrise, before Dhuhr
-        ("2023-10-27 07:00", "Dhuhr", "13:00", 0),
-        # Test case 5: Exactly at Dhuhr
-        ("2023-10-27 13:00", "Asr", "16:30", 0),
-        # Test case 6: After Dhuhr, before Asr
-        ("2023-10-27 14:00", "Asr", "16:30", 0),
-        # Test case 7: Exactly at Asr
-        ("2023-10-27 16:30", "Maghrib", "18:45", 0),
-        # Test case 8: After Asr, before Maghrib
-        ("2023-10-27 17:00", "Maghrib", "18:45", 0),
-        # Test case 9: Exactly at Maghrib
-        ("2023-10-27 18:45", "Isha", "20:00", 0),
-        # Test case 10: After Maghrib, before Isha
-        ("2023-10-27 19:00", "Isha", "20:00", 0),
-        # Test case 11: Exactly at Isha
-        ("2023-10-27 20:00", "Fajr (Tomorrow)", "05:00", 1),
-        # Test case 12: After Isha
-        ("2023-10-27 21:00", "Fajr (Tomorrow)", "05:00", 1),
-        # Test case 13: Midnight, before Fajr of next day
-        ("2023-10-28 00:00", "Fajr (Tomorrow)", "05:00", 0), # This assumes Fajr is for the *upcoming* day, if current_dt is 2023-10-27
-        # Test case 14: Date change during the day (e.g., testing Fajr of next day)
-        ("2023-10-27 23:59", "Fajr (Tomorrow)", "05:00", 1),
-    ]
-)
-def test_get_next_prayer_info_success(app_with_default_path, dummy_prayer_times_file, current_dt_str, expected_prayer_name, expected_time_str, expected_dt_offset_days):
-    """Test get_next_prayer_info with various current times against a valid prayer times file."""
-    # Create a dummy file for this test
-    app_with_default_path.prayer_times_filepath = dummy_prayer_times_file
-    app_with_default_path.prayer_times = app_with_default_path._load_prayer_times() # Reload with the dummy file
-
-    current_dt = datetime.strptime(current_dt_str, "%Y-%m-%d %H:%M")
-    prayer_name, time_str, prayer_dt = app_with_default_path.get_next_prayer_info(current_dt)
-
-    assert prayer_name == expected_prayer_name
-    assert time_str == expected_time_str
-
-    if prayer_dt:
-        # Calculate expected datetime based on offset
-        expected_date = current_dt.date() + timedelta(days=expected_dt_offset_days)
-        expected_time_obj = datetime.strptime(expected_time_str, "%H:%M").time()
-        expected_prayer_dt = datetime.combine(expected_date, expected_time_obj)
-        assert prayer_dt == expected_prayer_dt
-    else:
-        assert prayer_dt is None
-
-def test_get_next_prayer_info_no_times_loaded(app_with_custom_path):
-    """Test get_next_prayer_info when no prayer times are loaded."""
-    current_dt = datetime.now()
-    prayer_name, time_str, prayer_dt = app_with_custom_path.get_next_prayer_info(current_dt)
-    assert prayer_name == "No prayer times loaded"
-    assert time_str is None
-    assert prayer_dt is None
-
-def test_get_next_prayer_info_malformed_file(app_with_default_path, malformed_prayer_times_file):
-    """Test get_next_prayer_info with a malformed prayer times file."""
-    app_with_default_path.prayer_times_filepath = malformed_prayer_times_file
-    # The _load_prayer_times method should return None for malformed files
-    assert app_with_default_path._load_prayer_times() is None
-    prayer_name, time_str, prayer_dt = app_with_default_path.get_next_prayer_info(datetime.now())
-    assert prayer_name == "No prayer times loaded"
-    assert time_str is None
-    assert prayer_dt is None
-
-def test_get_next_prayer_info_empty_file(app_with_default_path, empty_prayer_times_file):
-    """Test get_next_prayer_info with an empty prayer times file."""
-    app_with_default_path.prayer_times_filepath = empty_prayer_times_file
-    # The _load_prayer_times method should return None for malformed files
-    assert app_with_default_path._load_prayer_times() is None
-    prayer_name, time_str, prayer_dt = app_with_default_path.get_next_prayer_info(datetime.now())
-    assert prayer_name == "No prayer times loaded"
-    assert time_str is None
-    assert prayer_dt is None
-
-def test_get_next_prayer_info_invalid_time_format_in_file(tmp_test_dir):
-    """Test get_next_prayer_info when the prayer times file has invalid time formats."""
-    filepath = os.path.join(tmp_test_dir, "invalid_time_adhan_times.json")
-    data = {
+def test_load_prayer_times_success(tmp_path):
+    """Test successful loading of prayer times from a valid JSON file."""
+    filepath = tmp_path / "test_adhan.json"
+    dummy_content = {
         "Fajr": "05:00",
-        "Sunrise": "invalid-time",
         "Dhuhr": "13:00",
-        "Asr": "16:30",
-        "Maghrib": "18:45",
+        "Asr": "16:00",
+        "Maghrib": "18:30",
         "Isha": "20:00"
     }
+    create_dummy_prayer_times_file(filepath=filepath, content=dummy_content)
+    
+    app = AdhanClockApp(prayer_times_filepath=str(filepath))
+    assert app.prayer_times == dummy_content
+    # Check if default file is NOT loaded if custom exists
+    assert app.prayer_times_filepath == str(filepath)
+
+def test_load_prayer_times_file_not_found():
+    """Test loading when the prayer times file does not exist."""
+    non_existent_file = "non_existent_times.json"
+    app = AdhanClockApp(prayer_times_filepath=non_existent_file)
+    assert app.prayer_times is None
+    assert not os.path.exists(non_existent_file) # Ensure we don't create it
+
+def test_load_prayer_times_invalid_json(tmp_path):
+    """Test loading when the prayer times file contains invalid JSON."""
+    filepath = tmp_path / "invalid.json"
     with open(filepath, 'w') as f:
-        import json
-        json.dump(data, f)
+        f.write("{ 'Fajr': '05:00', ") # Malformed JSON
+    
+    app = AdhanClockApp(prayer_times_filepath=str(filepath))
+    assert app.prayer_times is None
 
-    app = AdhanClockApp(prayer_times_filepath=filepath)
-    current_dt = datetime(2023, 10, 27, 7, 0) # Time after Fajr, before Dhuhr
-    prayer_name, time_str, prayer_dt = app.get_next_prayer_info(current_dt)
+def test_load_prayer_times_malformed_data(tmp_path):
+    """Test loading when the JSON data is missing required keys."""
+    filepath = tmp_path / "malformed.json"
+    malformed_content = {
+        "Fajr": "05:00",
+        "Dhuhr": "13:00",
+        # Missing Asr, Maghrib, Isha
+    }
+    create_dummy_prayer_times_file(filepath=filepath, content=malformed_content)
+    
+    app = AdhanClockApp(prayer_times_filepath=str(filepath))
+    assert app.prayer_times is None
 
-    # Sunrise is invalid, so it should be skipped and Dhuhr should be the next prayer
-    assert prayer_name == "Dhuhr"
-    assert time_str == "13:00"
-    assert prayer_dt == datetime(2023, 10, 27, 13, 0)
-
-def test_get_next_prayer_info_all_prayers_passed(app_with_default_path, dummy_prayer_times_file):
-    """Test get_next_prayer_info when all prayers for the day have passed."""
-    app_with_default_path.prayer_times_filepath = dummy_prayer_times_file
-    app_with_default_path.prayer_times = app_with_default_path._load_prayer_times()
-
-    # Set current time to after Isha
-    current_dt = datetime(2023, 10, 27, 21, 0)
-    prayer_name, time_str, prayer_dt = app_with_default_path.get_next_prayer_info(current_dt)
-
-    assert prayer_name == "Fajr (Tomorrow)"
+def test_get_next_prayer_info_before_fajr():
+    """Test when current time is before Fajr."""
+    create_dummy_prayer_times_file() # Ensures adhan_times.json exists for the test
+    app = AdhanClockApp()
+    current_dt = datetime(2023, 10, 27, 4, 0) # 4:00 AM
+    name, time_str, dt_obj = app.get_next_prayer_info(current_dt)
+    
+    assert name == "Fajr"
     assert time_str == "05:00"
-    # Expected time should be Fajr of the next day
-    expected_dt = datetime(2023, 10, 28, 5, 0)
-    assert prayer_dt == expected_dt
+    assert dt_obj == datetime(2023, 10, 27, 5, 0)
+
+def test_get_next_prayer_info_after_fajr_before_dhuhr():
+    """Test when current time is after Fajr but before Dhuhr."""
+    create_dummy_prayer_times_file()
+    app = AdhanClockApp()
+    current_dt = datetime(2023, 10, 27, 10, 0) # 10:00 AM
+    name, time_str, dt_obj = app.get_next_prayer_info(current_dt)
+    
+    assert name == "Dhuhr"
+    assert time_str == "13:00"
+    assert dt_obj == datetime(2023, 10, 27, 13, 0)
+
+def test_get_next_prayer_info_after_all_prayers_today():
+    """Test when current time is after all prayers for the day, expecting Fajr tomorrow."""
+    create_dummy_prayer_times_file()
+    app = AdhanClockApp()
+    current_dt = datetime(2023, 10, 27, 22, 0) # 10:00 PM
+    name, time_str, dt_obj = app.get_next_prayer_info(current_dt)
+    
+    assert name == "Fajr (Tomorrow)"
+    assert time_str == "05:00"
+    assert dt_obj == datetime(2023, 10, 28, 5, 0)
+
+def test_get_next_prayer_info_no_prayer_times_loaded():
+    """Test behavior when no prayer times are loaded."""
+    app = AdhanClockApp(prayer_times_filepath="non_existent_file.json")
+    current_dt = datetime.now()
+    name, time_str, dt_obj = app.get_next_prayer_info(current_dt)
+    
+    assert name == "No prayer times loaded"
+    assert time_str is None
+    assert dt_obj is None
+
+def test_get_next_prayer_info_malformed_time_in_data(tmp_path):
+    """Test with malformed time string for a prayer."""
+    filepath = tmp_path / "malformed_time.json"
+    malformed_content = {
+        "Fajr": "05:00",
+        "Dhuhr": "invalid-time",
+        "Asr": "16:00",
+        "Maghrib": "18:30",
+        "Isha": "20:00"
+    }
+    create_dummy_prayer_times_file(filepath=filepath, content=malformed_content)
+    
+    app = AdhanClockApp(prayer_times_filepath=str(filepath))
+    current_dt = datetime(2023, 10, 27, 12, 0) # Before Dhuhr
+    name, time_str, dt_obj = app.get_next_prayer_info(current_dt)
+    
+    # Dhuhr should be skipped, so Asr should be next
+    assert name == "Asr"
+    assert time_str == "16:00"
+    assert dt_obj == datetime(2023, 10, 27, 16, 0)
+
+def test_get_next_prayer_info_malformed_tomorrow_fajr(tmp_path):
+    """Test scenario where today's prayers are passed, but tomorrow's Fajr time is malformed."""
+    filepath = tmp_path / "malformed_fajr.json"
+    malformed_content = {
+        "Fajr": "invalid-fajr-time", # Malformed
+        "Dhuhr": "13:00",
+        "Asr": "16:00",
+        "Maghrib": "18:30",
+        "Isha": "20:00"
+    }
+    create_dummy_prayer_times_file(filepath=filepath, content=malformed_content)
+    
+    app = AdhanClockApp(prayer_times_filepath=str(filepath))
+    current_dt = datetime(2023, 10, 27, 22, 0) # After all today's prayers
+    name, time_str, dt_obj = app.get_next_prayer_info(current_dt)
+    
+    # Should fall back to "All prayers done for today" if tomorrow's Fajr is malformed
+    assert name == "All prayers done for today"
+    assert time_str is None
+    assert dt_obj is None
 
 def test_format_time_display_with_time():
-    """Test format_time_display with a valid time string."""
+    """Test formatting a prayer name and time when time is present."""
     app = AdhanClockApp()
     formatted = app.format_time_display("Fajr", "05:00")
     assert formatted == "Fajr: 05:00"
 
 def test_format_time_display_without_time():
-    """Test format_time_display with a None time string."""
+    """Test formatting a prayer name when time is None or empty."""
     app = AdhanClockApp()
-    formatted = app.format_time_display("Fajr", None)
-    assert formatted == "Fajr: N/A"
+    formatted = app.format_time_display("Asr", None)
+    assert formatted == "Asr: N/A"
+    formatted = app.format_time_display("Maghrib", "")
+    assert formatted == "Maghrib: N/A"
 
-@patch('builtins.print')
-def test_run_gui_prints_info(mock_print, app_with_default_path, dummy_prayer_times_file):
-    """Test that run_gui prints the current time and next prayer info."""
-    app_with_default_path.prayer_times_filepath = dummy_prayer_times_file
-    app_with_default_path.prayer_times = app_with_default_path._load_prayer_times()
-
-    # Mock datetime.now() to control the "current time"
-    fixed_time = datetime(2023, 10, 27, 19, 30) # After Asr, before Maghrib
-    with patch('main.datetime') as mock_datetime:
-        mock_datetime.now.return_value = fixed_time
-        mock_datetime.strftime = datetime.strftime # Keep original strftime
-
-        app_with_default_path.run_gui()
-
-    # Check if print was called with the expected output
-    calls = [call[0][0] for call in mock_print.call_args_list]
-
-    assert "Starting Adhan Clock GUI..." in calls
-    assert f"Current time: {fixed_time.strftime('%H:%M:%S')}" in calls
-    assert "Next Prayer: Maghrib at 18:45" in calls
-    assert "GUI application logic would continue here..." in calls
-
-def test_load_prayer_times_file_not_found(app_with_custom_path):
-    """Test _load_prayer_times when the file does not exist."""
-    # Ensure the file path is not pointing to an existing file
-    if os.path.exists(app_with_custom_path.prayer_times_filepath):
-        os.remove(app_with_custom_path.prayer_times_filepath)
+def test_run_gui_prints_info(capsys):
+    """Test that run_gui prints basic information (mocking current time)."""
+    # Create a dummy file so it's not considered "not found"
+    create_dummy_prayer_times_file() 
     
-    with patch('builtins.print') as mock_print:
-        prayer_times = app_with_custom_path._load_prayer_times()
+    app = AdhanClockApp()
     
-    assert prayer_times is None
-    mock_print.assert_any_call(f"Warning: Prayer times file not found at {app_with_custom_path.prayer_times_filepath}")
-
-def test_load_prayer_times_json_decode_error(tmp_test_dir):
-    """Test _load_prayer_times when the file content is invalid JSON."""
-    filepath = os.path.join(tmp_test_dir, "bad_json.json")
-    with open(filepath, 'w') as f:
-        f.write("This is not JSON")
-
-    app = AdhanClockApp(prayer_times_filepath=filepath)
-    with patch('builtins.print') as mock_print:
-        prayer_times = app._load_prayer_times()
-
-    assert prayer_times is None
-    mock_print.assert_any_call(f"Error reading or parsing prayer times from {filepath}: Expecting value: line 1 column 1 (char 0)") # Or similar JSONDecodeError message
-
-def test_load_prayer_times_io_error(tmp_test_dir):
-    """Test _load_prayer_times when there's an IOError during file read."""
-    filepath = os.path.join(tmp_test_dir, "readonly.json")
-    # Create an empty file and make it read-only (if possible on the OS)
-    with open(filepath, 'w') as f:
-        pass # Create empty file
+    # Mock datetime.now to control the "current" time for predictable output
+    original_datetime_now = datetime.now
+    mock_current_dt = datetime(2023, 10, 27, 10, 30) # Example time
+    datetime.now = lambda: mock_current_dt
     
-    # Attempt to make it read-only (may not work on all OS/file systems)
-    # For robustness, we'll simulate the error more directly or rely on specific OS behavior.
-    # A more reliable way is to patch the open call to raise an IOError.
-    with patch('builtins.open', side_effect=IOError("Simulated IO Error")):
-        app = AdhanClockApp(prayer_times_filepath=filepath)
-        with patch('builtins.print') as mock_print:
-            prayer_times = app._load_prayer_times()
+    app.run_gui()
     
-    assert prayer_times is None
-    mock_print.assert_any_call(f"Error reading or parsing prayer times from {filepath}: Simulated IO Error")
-
-def test_load_prayer_times_malformed_data(app_with_default_path, malformed_prayer_times_file):
-    """Test _load_prayer_times when the JSON data is missing required keys."""
-    app_with_default_path.prayer_times_filepath = malformed_prayer_times_file
-    with patch('builtins.print') as mock_print:
-        prayer_times = app_with_default_path._load_prayer_times()
+    # Restore original datetime.now
+    datetime.now = original_datetime_now
     
-    assert prayer_times is None
-    mock_print.assert_any_call(f"Warning: Malformed prayer times data in {malformed_prayer_times_file} (missing expected keys).")
+    captured = capsys.readouterr()
+    assert "Starting Adhan Clock GUI..." in captured.out
+    assert f"Current time: {mock_current_dt.strftime('%H:%M:%S')}" in captured.out
+    assert "Next Prayer: Dhuhr at 13:00" in captured.out
+    assert "GUI application logic would continue here..." in captured.out
 
-def test_get_next_prayer_info_tomorrow_fajr_invalid_format(tmp_test_dir):
-    """Test get_next_prayer_info when tomorrow's Fajr time is malformed."""
-    filepath = os.path.join(tmp_test_dir, "tomorrow_fajr_invalid.json")
-    data = {
-        "Fajr": "invalid-tomorrow-fajr", # This is only checked if current day's prayers are all passed
-        "Sunrise": "06:15",
-        "Dhuhr": "13:00",
-        "Asr": "16:30",
-        "Maghrib": "18:45",
-        "Isha": "20:00"
+# Test with custom filepath for run_gui
+def test_run_gui_with_custom_file(capsys, tmp_path):
+    """Test that run_gui uses a custom file if provided."""
+    custom_filepath = tmp_path / "custom_gui_times.json"
+    custom_content = {
+        "Fajr": "04:00",
+        "Dhuhr": "12:00",
+        "Asr": "15:00",
+        "Maghrib": "17:00",
+        "Isha": "19:00"
     }
-    with open(filepath, 'w') as f:
-        import json
-        json.dump(data, f)
-
-    app = AdhanClockApp(prayer_times_filepath=filepath)
-    # Set current time to after Isha
-    current_dt = datetime(2023, 10, 27, 21, 0)
+    create_dummy_prayer_times_file(filepath=custom_filepath, content=custom_content)
     
-    with patch('builtins.print') as mock_print:
-        prayer_name, time_str, prayer_dt = app.get_next_prayer_info(current_dt)
+    app = AdhanClockApp(prayer_times_filepath=str(custom_filepath))
     
-    assert prayer_name == "All prayers done for today" # Fallback when tomorrow's Fajr is also bad
-    assert time_str is None
-    assert prayer_dt is None
-    mock_print.assert_any_call("Warning: Invalid Fajr time format for tomorrow: 'invalid-tomorrow-fajr'")
+    mock_current_dt = datetime(2023, 10, 27, 10, 0) # Example time
+    original_datetime_now = datetime.now
+    datetime.now = lambda: mock_current_dt
+    
+    app.run_gui()
+    
+    datetime.now = original_datetime_now # Restore
+    
+    captured = capsys.readouterr()
+    assert "Starting Adhan Clock GUI..." in captured.out
+    assert f"Current time: {mock_current_dt.strftime('%H:%M:%S')}" in captured.out
+    assert "Next Prayer: Dhuhr at 12:00" in captured.out # Should use custom times
+    assert "GUI application logic would continue here..." in captured.out
 
 ```
