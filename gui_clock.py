@@ -10,7 +10,7 @@ import pytz
 from adhan_clock import get_times
 # --- IMPORTING SETTINGS DIALOG ---
 from gui.settings import SettingsDialog
-
+from hijridate import Gregorian
 
 # ----------------------------
 
@@ -148,10 +148,19 @@ class AdhanClockUI(QWidget):
     def update_display(self):
         if not self.local_tz: return
 
-        # 1. Update current time and date
+        # 1. Update current time
         now = datetime.now(self.local_tz)
         self.time_label.setText(now.strftime("%H:%M:%S"))
-        self.date_label.setText(now.strftime("%A, %d %B %Y"))
+
+        # --- FIX: Calculate Hijri Date using hijridate ---
+        gregorian_date = now.date()
+        # Convert today's Gregorian date to Hijri
+        hdate = Gregorian(gregorian_date.year, gregorian_date.month, gregorian_date.day)
+
+        # Format the display string: "Gregorian Date | Hijri Date"
+        # hijridate uses .day, .month_name(), .year
+        full_date_str = f"{now.strftime('%A, %d %B %Y')} | {hdate.day} {hdate.month_name()} {hdate.year} AH"
+        self.date_label.setText(full_date_str)
 
         # 2. Get times
         today = now.date()

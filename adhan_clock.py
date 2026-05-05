@@ -9,6 +9,7 @@ from adhanpy.calculation.CalculationMethod import CalculationMethod
 from adhanpy.calculation.CalculationParameters import CalculationParameters
 from mac_notifications import client
 
+
 # 1. Load Configuration
 with open('config.json') as f:
     config = json.load(f)
