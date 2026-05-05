@@ -131,6 +131,11 @@ Instructions:
 
 3. If you need to add or change app code, do so in the smallest way possible.
 4. If you are only adding tests, do not change app code.
+Instructions:
+5. RETURN ONLY RAW FILE CONTENTS. Do NOT wrap any code in markdown code blocks like:
+   ```python or ```
+
+5. Do not add extra commentary outside the --- FILE: ... --- blocks.
 """
 
 

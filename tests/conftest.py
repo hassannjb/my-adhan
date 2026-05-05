@@ -1,4 +1,4 @@
-```python
+
 import pytest
 import os
 import json
@@ -131,4 +131,3 @@ def create_prayer_times_file(temp_dir):
 # For now, assuming a minimal valid structure to pass the import.
 # If there was specific test setup intended, it should be implemented here.
 # The original error indicated a string literal issue, which is now corrected by removing the invalid syntax.
-```
