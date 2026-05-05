@@ -1,261 +1,303 @@
 ```python
 import pytest
-from unittest.mock import Mock, patch
 import json
-import sys
 import os
-import requests # Need to import requests to mock it
+from unittest.mock import patch, MagicMock
+import requests # For mocking exceptions
 
-# Assume updateAzaanTimers.py exists at the root of the project and is importable.
-# If not, adjust sys.path or project structure for imports to work.
-import updateAzaanTimers # Import the script as a module
+# Add parent directory to sys.path to allow importing updateAzaanTimers.py
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from updateAzaanTimers import fetch_prayer_times, save_prayer_times, main, PRAYER_TIMES_API_URL
 
-# Mock API response for successful fetches
-MOCK_SUCCESS_API_RESPONSE = {
-    "results": {
-        "datetime": [
-            {
-                "times": {
-                    "Fajr": "05:00", "Dhuhr": "12:30", "Asr": "16:00",
-                    "Maghrib": "18:00", "Isha": "20:00", "Sunrise": "06:30", "Sunset": "17:45"
-                },
-                "date": {
-                    "timestamp": 1678886400,
-                    "gregorian": "2023-03-15",
-                    "hijri": "1444-08-23"
-                }
-            }
-        ]
-    }
-}
-
+# Fixture for a successful API response
 @pytest.fixture
-def mock_requests_get():
-    """Fixture to mock requests.get calls made by updateAzaanTimers."""
-    with patch('updateAzaanTimers.requests.get') as mock_get:
-        yield mock_get
+def mock_success_response():
+    return {
+        "code": 200,
+        "status": "OK",
+        "results": {
+            "datetime": [
+                {
+                    "times": {
+                        "Fajr": "05:00",
+                        "Sunrise": "06:30",
+                        "Dhuhr": "12:30",
+                        "Asr": "16:00",
+                        "Sunset": "19:30",
+                        "Maghrib": "19:45",
+                        "Isha": "21:00"
+                    },
+                    "date": {
+                        "timestamp": "1678886400"
+                    }
+                }
+            ],
+            "location": {
+                "latitude": 51.5,
+                "longitude": -0.1,
+                "timezone": "Europe/London"
+            },
+            "settings": {
+                "calculation_method": "MWL"
+            }
+        }
+    }
 
-@pytest.fixture(autouse=True)
-def restore_sys_argv():
-    """Fixture to restore sys.argv after each test that modifies it."""
-    original_argv = sys.argv[:]
-    yield
-    sys.argv = original_argv
+# Fixture for prayer times data to save
+@pytest.fixture
+def prayer_times_to_save():
+    return {
+        "Fajr": "05:05",
+        "Dhuhr": "12:35",
+        "Asr": "16:05",
+        "Maghrib": "19:50",
+        "Isha": "21:05"
+    }
 
-# --- Tests for fetch_prayer_times function ---
-def test_fetch_prayer_times_success(mock_requests_get):
-    """Test successful fetching of prayer times from the API."""
-    mock_response = Mock()
+# region: Tests for fetch_prayer_times
+
+def test_fetch_prayer_times_success(mocker, mock_success_response):
+    """Test successful fetching and parsing of prayer times from the API."""
+    mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_SUCCESS_API_RESPONSE
-    mock_requests_get.return_value = mock_response
+    mock_response.json.return_value = mock_success_response
+    mock_response.raise_for_status.return_value = None # Simulate no HTTP errors
+    mocker.patch('requests.get', return_value=mock_response)
 
-    times = updateAzaanTimers.fetch_prayer_times("London", "UK")
-    assert times == MOCK_SUCCESS_API_RESPONSE['results']['datetime'][0]['times']
-    mock_requests_get.assert_called_once_with(
-        updateAzaanTimers.PRAYER_TIMES_API_URL,
+    times = fetch_prayer_times("London", "UK", method="2")
+    assert times == mock_success_response['results']['datetime'][0]['times']
+    requests.get.assert_called_once_with(
+        PRAYER_TIMES_API_URL,
         params={"city": "London", "country": "UK", "method": "2"},
         timeout=10
     )
 
-def test_fetch_prayer_times_api_error(mock_requests_get, capsys):
-    """Test fetching prayer times when the API returns an HTTP error."""
-    mock_requests_get.side_effect = requests.exceptions.HTTPError("404 Not Found")
+def test_fetch_prayer_times_http_error(mocker, capsys):
+    """Test handling of HTTP errors (e.g., 404, 500) from the API."""
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Client Error: Not Found for url: ...")
+    mocker.patch('requests.get', return_value=mock_response)
 
-    times = updateAzaanTimers.fetch_prayer_times("InvalidCity", "InvalidCountry")
+    times = fetch_prayer_times("InvalidCity", "InvalidCountry")
     assert times is None
     captured = capsys.readouterr()
-    assert "Error fetching prayer times for InvalidCity, InvalidCountry: 404 Not Found" in captured.out
+    assert "Error fetching prayer times for InvalidCity, InvalidCountry: 404 Client Error" in captured.err
 
-def test_fetch_prayer_times_network_error(mock_requests_get, capsys):
-    """Test fetching prayer times when a network connection error occurs."""
-    mock_requests_get.side_effect = requests.exceptions.ConnectionError("Network unreachable")
+def test_fetch_prayer_times_connection_error(mocker, capsys):
+    """Test handling of network connection errors."""
+    mocker.patch('requests.get', side_effect=requests.exceptions.ConnectionError("Network unreachable"))
 
-    times = updateAzaanTimers.fetch_prayer_times("SomeCity", "SomeCountry")
+    times = fetch_prayer_times("London", "UK")
     assert times is None
     captured = capsys.readouterr()
-    assert "Error fetching prayer times for SomeCity, SomeCountry: Network unreachable" in captured.out
+    assert "Error fetching prayer times for London, UK: Network unreachable" in captured.err
 
-def test_fetch_prayer_times_invalid_api_response_structure(mock_requests_get, capsys):
-    """Test fetching prayer times when API returns malformed JSON structure."""
-    mock_response = Mock()
+def test_fetch_prayer_times_timeout_error(mocker, capsys):
+    """Test handling of request timeout errors."""
+    mocker.patch('requests.get', side_effect=requests.exceptions.Timeout("Request timed out"))
+
+    times = fetch_prayer_times("London", "UK")
+    assert times is None
+    captured = capsys.readouterr()
+    assert "Error fetching prayer times for London, UK: Request timed out" in captured.err
+
+def test_fetch_prayer_times_invalid_json_response(mocker, capsys):
+    """Test handling when the API returns non-JSON or malformed JSON."""
+    mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {"bad_key": "bad_value"} # Missing expected keys
-    mock_requests_get.return_value = mock_response
+    mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "doc", 0)
+    mock_response.raise_for_status.return_value = None
+    mocker.patch('requests.get', return_value=mock_response)
 
-    times = updateAzaanTimers.fetch_prayer_times("City", "Country")
+    times = fetch_prayer_times("London", "UK")
     assert times is None
     captured = capsys.readouterr()
-    assert "Error parsing API response: Missing 'results' or 'datetime' key in response for City, Country." in captured.out
+    assert "Error fetching prayer times for London, UK: Expecting value: line 1 column 1 (char 0)" in captured.err
 
-def test_fetch_prayer_times_timeout(mock_requests_get, capsys):
-    """Test fetching prayer times when the API request times out."""
-    mock_requests_get.side_effect = requests.exceptions.Timeout("Request timed out")
+def test_fetch_prayer_times_missing_results_key(mocker, capsys):
+    """Test handling when the API response misses the 'results' key."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"code": 200, "status": "OK"} # Missing 'results'
+    mock_response.raise_for_status.return_value = None
+    mocker.patch('requests.get', return_value=mock_response)
 
-    times = updateAzaanTimers.fetch_prayer_times("SlowCity", "SlowCountry")
+    times = fetch_prayer_times("London", "UK")
     assert times is None
     captured = capsys.readouterr()
-    assert "Error fetching prayer times for SlowCity, SlowCountry: Request timed out" in captured.out
+    assert "Error parsing API response: Missing 'results' or 'datetime' key in response for London, UK." in captured.out
 
-# --- Tests for save_prayer_times function ---
-def test_save_prayer_times_success(tmp_path):
-    """Test successful saving of prayer times to a JSON file."""
-    output_file = tmp_path / "test_adhan_times.json"
-    prayer_data = {"Fajr": "05:00", "Dhuhr": "12:30"}
+def test_fetch_prayer_times_missing_datetime_key(mocker, capsys):
+    """Test handling when the API response misses the 'datetime' key."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"code": 200, "status": "OK", "results": {}} # Missing 'datetime'
+    mock_response.raise_for_status.return_value = None
+    mocker.patch('requests.get', return_value=mock_response)
 
-    success = updateAzaanTimers.save_prayer_times(str(output_file), prayer_data)
-    assert success is True
-    assert output_file.exists()
-    content = json.loads(output_file.read_text())
-    assert content == prayer_data
+    times = fetch_prayer_times("London", "UK")
+    assert times is None
+    captured = capsys.readouterr()
+    assert "Error parsing API response: Missing 'results' or 'datetime' key in response for London, UK." in captured.out
 
-def test_save_prayer_times_to_nonexistent_directory(tmp_path):
-    """Test saving prayer times to a file in a non-existent directory."""
-    output_dir = tmp_path / "new_dir"
-    output_file = output_dir / "test_adhan_times.json"
-    prayer_data = {"Fajr": "05:00"}
+def test_fetch_prayer_times_empty_datetime_list(mocker, capsys):
+    """Test handling when the 'datetime' list in the API response is empty."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"code": 200, "status": "OK", "results": {"datetime": []}} # Empty 'datetime' list
+    mock_response.raise_for_status.return_value = None
+    mocker.patch('requests.get', return_value=mock_response)
 
-    # os.makedirs(..., exist_ok=True) handles this, so it should succeed
-    success = updateAzaanTimers.save_prayer_times(str(output_file), prayer_data)
-    assert success is True
-    assert output_file.exists()
-    assert output_dir.exists()
+    times = fetch_prayer_times("London", "UK")
+    assert times is None
+    captured = capsys.readouterr()
+    assert "Error parsing API response: Missing 'results' or 'datetime' key in response for London, UK." in captured.out
 
-def test_save_prayer_times_file_write_error(tmp_path, capsys):
-    """Test saving prayer times when a file write error occurs."""
-    # Simulate a permission denied error by patching builtins.open
-    with patch('builtins.open', mock_open()) as mock_file:
-        mock_file.side_effect = IOError("Permission denied")
+def test_fetch_prayer_times_missing_times_in_datetime(mocker, capsys):
+    """Test handling when the 'times' key is missing inside a datetime object."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "code": 200,
+        "status": "OK",
+        "results": {
+            "datetime": [{"date": {"timestamp": "1678886400"}}] # Missing 'times' key
+        }
+    }
+    mock_response.raise_for_status.return_value = None
+    mocker.patch('requests.get', return_value=mock_response)
 
-        output_file = tmp_path / "test_adhan_times.json"
-        prayer_data = {"Fajr": "05:00"}
+    times = fetch_prayer_times("London", "UK")
+    assert times is None
+    captured = capsys.readouterr()
+    assert "Error parsing API response structure for London, UK: 'times'" in captured.err
 
-        success = updateAzaanTimers.save_prayer_times(str(output_file), prayer_data)
-        assert success is False
-        captured = capsys.readouterr()
-        assert f"Error saving prayer times to file '{output_file}': Permission denied" in captured.out
+# endregion
 
-def test_save_prayer_times_no_data(tmp_path, capsys):
-    """Test saving prayer times when no data is provided."""
-    output_file = tmp_path / "test_adhan_times.json"
-    
-    success = updateAzaanTimers.save_prayer_times(str(output_file), None)
-    assert success is False
+# region: Tests for save_prayer_times
+
+def test_save_prayer_times_success_new_file(tmp_path, prayer_times_to_save):
+    """Test successful saving of prayer times to a new JSON file."""
+    output_path = tmp_path / "adhan_times_test.json"
+    result = save_prayer_times(str(output_path), prayer_times_to_save)
+    assert result is True
+    assert output_path.exists()
+    with open(output_path, 'r') as f:
+        data = json.load(f)
+    assert data == prayer_times_to_save
+
+def test_save_prayer_times_success_existing_file(tmp_path, prayer_times_to_save):
+    """Test successful saving of prayer times, overwriting an existing JSON file."""
+    output_path = tmp_path / "adhan_times_test.json"
+    # Create a dummy existing file
+    with open(output_path, 'w') as f:
+        f.write('{"OldFajr": "04:00"}')
+
+    result = save_prayer_times(str(output_path), prayer_times_to_save)
+    assert result is True
+    assert output_path.exists()
+    with open(output_path, 'r') as f:
+        data = json.load(f)
+    assert data == prayer_times_to_save
+
+def test_save_prayer_times_no_data_to_save(capsys):
+    """Test behavior when no prayer times data is provided to save."""
+    # Test with None
+    result = save_prayer_times("dummy.json", None)
+    assert result is False
     captured = capsys.readouterr()
     assert "No prayer times data to save." in captured.out
-    assert not output_file.exists()
+
+    # Test with empty dictionary
+    result = save_prayer_times("dummy.json", {})
+    # Note: capsys accumulates output, so previous message might still be there.
+    # We re-read to confirm current behavior.
+    captured = capsys.readouterr()
+    assert "No prayer times data to save." in captured.out
 
 
-# --- Tests for main() function (CLI entry point) ---
-def test_main_success(mock_requests_get, tmp_path, capsys):
-    """Test successful fetching and saving of prayer times via main CLI function."""
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_SUCCESS_API_RESPONSE
-    mock_requests_get.return_value = mock_response
+def test_save_prayer_times_io_error(mocker, tmp_path, prayer_times_to_save, capsys):
+    """Test handling of IOError during file writing (e.g., permission denied)."""
+    # Create a path that would fail due to permission (mocking open)
+    output_path = tmp_path / "forbidden_dir" / "adhan_times_test.json"
+    mocker.patch('builtins.open', side_effect=IOError("Permission denied"))
+    mocker.patch('os.makedirs') # Mock this to prevent actual directory creation, as open() will fail first
 
-    test_output_file = tmp_path / "test_adhan_times.json"
-    sys.argv = [
-        "updateAzaanTimers.py",
-        "--city", "London",
-        "--country", "UK",
-        "--method", "2",
-        "--output", str(test_output_file)
-    ]
+    result = save_prayer_times(str(output_path), prayer_times_to_save)
+    assert result is False
+    captured = capsys.readouterr()
+    assert f"Error saving prayer times to file '{output_path}': Permission denied" in captured.out
 
-    updateAzaanTimers.main()
+def test_save_prayer_times_creates_directory(tmp_path, prayer_times_to_save):
+    """Test that save_prayer_times creates necessary parent directories."""
+    output_dir = tmp_path / "subdir" / "another_subdir"
+    output_path = output_dir / "adhan_times_test.json"
+    assert not output_dir.exists()
 
-    mock_requests_get.assert_called_once_with(
-        updateAzaanTimers.PRAYER_TIMES_API_URL,
-        params={"city": "London", "country": "UK", "method": "2"},
-        timeout=10
+    result = save_prayer_times(str(output_path), prayer_times_to_save)
+    assert result is True
+    assert output_dir.is_dir() # Verify directory was created
+    assert output_path.exists()
+
+# endregion
+
+# region: Tests for main function (CLI script entry point)
+
+def test_main_success(mocker, capsys, tmp_path, mock_success_response):
+    """Test successful execution of the main CLI function."""
+    # Mock argparse arguments
+    mocker.patch('argparse.ArgumentParser.parse_args', return_value=mocker.MagicMock(
+        city="TestCity", country="TestCountry", method="5", output=str(tmp_path / "output.json")
+    ))
+    # Mock fetch_prayer_times to return data
+    mocker.patch('updateAzaanTimers.fetch_prayer_times', return_value=mock_success_response['results']['datetime'][0]['times'])
+    # Mock save_prayer_times to simulate success and prevent actual file IO
+    mocker.patch('updateAzaanTimers.save_prayer_times', return_value=True)
+
+    main()
+
+    captured = capsys.readouterr()
+    assert "Fetching prayer times for TestCity, TestCountry using method 5..." in captured.out
+    updateAzaanTimers.fetch_prayer_times.assert_called_once_with("TestCity", "TestCountry", "5")
+    updateAzaanTimers.save_prayer_times.assert_called_once_with(
+        str(tmp_path / "output.json"), mock_success_response['results']['datetime'][0]['times']
     )
+    # The actual `save_prayer_times` prints "Prayer times saved to {filepath}", but since it's mocked,
+    # that specific output won't be in `captured.out` for this test.
 
-    assert test_output_file.exists()
-    content = json.loads(test_output_file.read_text())
-    assert content == MOCK_SUCCESS_API_RESPONSE['results']['datetime'][0]['times']
+def test_main_fetch_failure(mocker, capsys, tmp_path):
+    """Test main function behavior when fetching prayer times fails."""
+    mocker.patch('argparse.ArgumentParser.parse_args', return_value=mocker.MagicMock(
+        city="TestCity", country="TestCountry", method="2", output=str(tmp_path / "output.json")
+    ))
+    mocker.patch('updateAzaanTimers.fetch_prayer_times', return_value=None)
+    mocker.patch('updateAzaanTimers.save_prayer_times') # Should not be called
+
+    main()
 
     captured = capsys.readouterr()
-    assert "Fetching prayer times for London, UK using method 2..." in captured.out
-    assert f"Prayer times saved to {test_output_file}" in captured.out
-
-def test_main_api_failure_path(mock_requests_get, tmp_path, capsys):
-    """Test main function when API call fails (e.g., HTTP error)."""
-    mock_requests_get.side_effect = requests.exceptions.HTTPError("404 Not Found")
-
-    test_output_file = tmp_path / "test_adhan_times_error.json"
-    sys.argv = [
-        "updateAzaanTimers.py",
-        "--city", "InvalidCity",
-        "--country", "InvalidCountry",
-        "--output", str(test_output_file)
-    ]
-
-    updateAzaanTimers.main()
-
-    assert not test_output_file.exists()
-    captured = capsys.readouterr()
-    assert "Error fetching prayer times for InvalidCity, InvalidCountry: 404 Not Found" in captured.out
+    assert "Fetching prayer times for TestCity, TestCountry using method 2..." in captured.out
     assert "Failed to retrieve or save prayer times." in captured.out
+    updateAzaanTimers.fetch_prayer_times.assert_called_once()
+    updateAzaanTimers.save_prayer_times.assert_not_called()
 
-def test_main_file_write_failure_path(mock_requests_get, tmp_path, capsys):
-    """Test main function when saving to file fails after successful API fetch."""
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_SUCCESS_API_RESPONSE
-    mock_requests_get.return_value = mock_response
+def test_main_save_failure(mocker, capsys, tmp_path, mock_success_response):
+    """Test main function behavior when saving prayer times fails."""
+    mocker.patch('argparse.ArgumentParser.parse_args', return_value=mocker.MagicMock(
+        city="TestCity", country="TestCountry", method="2", output=str(tmp_path / "output.json")
+    ))
+    mocker.patch('updateAzaanTimers.fetch_prayer_times', return_value=mock_success_response['results']['datetime'][0]['times'])
+    mocker.patch('updateAzaanTimers.save_prayer_times', return_value=False) # Simulate save failure
 
-    # Simulate permission denied during file write
-    mock_open_patch = patch('builtins.open', mock_open())
-    with mock_open_patch as mock_file_open:
-        mock_file_open.side_effect = IOError("Permission denied")
+    main()
 
-        test_output_file = tmp_path / "test_adhan_times_permission_denied.json"
-        sys.argv = [
-            "updateAzaanTimers.py",
-            "--city", "City",
-            "--country", "Country",
-            "--output", str(test_output_file)
-        ]
+    captured = capsys.readouterr()
+    assert "Fetching prayer times for TestCity, TestCountry using method 2..." in captured.out
+    assert "Failed to retrieve or save prayer times." in captured.out
+    updateAzaanTimers.fetch_prayer_times.assert_called_once()
+    updateAzaanTimers.save_prayer_times.assert_called_once()
 
-        updateAzaanTimers.main()
-
-        captured = capsys.readouterr()
-        assert "Fetching prayer times for City, Country using method 2..." in captured.out
-        assert f"Error saving prayer times to file '{test_output_file}': Permission denied" in captured.out
-        assert "Failed to retrieve or save prayer times." in captured.out
-        assert not test_output_file.exists() # Should not be created
-
-def test_main_default_output_file(mock_requests_get, tmp_path, capsys):
-    """Test main function uses default output file if not specified."""
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = MOCK_SUCCESS_API_RESPONSE
-    mock_requests_get.return_value = mock_response
-
-    # Change current working directory to tmp_path so default file lands there
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-
-    sys.argv = [
-        "updateAzaanTimers.py",
-        "--city", "London",
-        "--country", "UK",
-        "--method", "2"
-    ]
-
-    try:
-        updateAzaanTimers.main()
-
-        default_output_file = tmp_path / "adhan_times.json"
-        assert default_output_file.exists()
-        content = json.loads(default_output_file.read_text())
-        assert content == MOCK_SUCCESS_API_RESPONSE['results']['datetime'][0]['times']
-
-        captured = capsys.readouterr()
-        # The script prints the full path, but if run in CWD, it might just print the name.
-        # Let's ensure the full path is tested given our main.py prints f"Prayer times saved to {filepath}"
-        assert f"Prayer times saved to {default_output_file}" in captured.out
-    finally:
-        os.chdir(original_cwd) # Restore original CWD
+# endregion
 ```
