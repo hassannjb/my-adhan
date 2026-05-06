@@ -32,13 +32,14 @@ class AdhanClockUI(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Adhan Clock")
-        self.setGeometry(100, 100, 450, 700)
+        self.setGeometry(100, 100, 450, 750)
         self.config_path = 'config.json'
         self.setStyleSheet("background-color: #2b2b2b; color: #ffffff; font-family: sans-serif;")
 
         self.local_tz = None
         # --- FIX: Initialize prayer_labels here to ensure it exists ---
         self.prayer_labels = {}
+        self.sunrise_label = None
 
         self.init_ui()
 
@@ -84,7 +85,7 @@ class AdhanClockUI(QWidget):
             "color: white; border: 1px solid #555555; border-radius: 5px; padding: 10px; font-size: 14px;")
 
         # --- FIX: Ensure the box has a minimum size ---
-        prayer_group.setMinimumHeight(200)
+        prayer_group.setMinimumHeight(250)
         prayer_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         prayer_layout = QGridLayout()
@@ -92,7 +93,7 @@ class AdhanClockUI(QWidget):
         prayer_layout.setSpacing(10)
 
         self.prayer_labels = {}
-        prayers = ["Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"]
+        prayers = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]
 
         for i, prayer in enumerate(prayers):
             name_lbl = QLabel(prayer)
@@ -106,7 +107,10 @@ class AdhanClockUI(QWidget):
             prayer_layout.addWidget(name_lbl, i, 0)
             prayer_layout.addWidget(time_lbl, i, 1)
 
-            self.prayer_labels[prayer] = time_lbl
+            if prayer == "Sunrise":
+                self.sunrise_label = time_lbl
+            else:
+                self.prayer_labels[prayer] = time_lbl
 
         prayer_group.setLayout(prayer_layout)
         layout.addWidget(prayer_group)
@@ -171,6 +175,7 @@ class AdhanClockUI(QWidget):
         # 3. Ensure all times are in the correct timezone
         times = {
             "Fajr": pt.fajr.astimezone(self.local_tz),
+            "Sunrise": pt.sunrise.astimezone(self.local_tz),
             "Dhuhr": pt.dhuhr.astimezone(self.local_tz),
             "Asr": pt.asr.astimezone(self.local_tz),
             "Maghrib": pt.maghrib.astimezone(self.local_tz),
@@ -179,6 +184,13 @@ class AdhanClockUI(QWidget):
 
         # 4. Update labels and find next prayer
         next_prayer = None
+        
+        # Update Sunrise
+        if self.sunrise_label.text() != times["Sunrise"].strftime("%H:%M"):
+            self.sunrise_label.setText(times["Sunrise"].strftime("%H:%M"))
+            self.sunrise_label.repaint()
+        
+        # Update others
         for prayer, lbl in self.prayer_labels.items():
             p_time = times[prayer]
             new_text = p_time.strftime("%H:%M")
@@ -236,6 +248,9 @@ class AdhanClockUI(QWidget):
         # Update prayer list fonts inside the dictionary
         for lbl in self.prayer_labels.values():
             lbl.setStyleSheet(f"font-size: {prayer_font_size}px; color: #ffffff;")
+        
+        if self.sunrise_label:
+            self.sunrise_label.setStyleSheet(f"font-size: {prayer_font_size}px; color: #ffffff;")
 
         super().resizeEvent(event)
 
