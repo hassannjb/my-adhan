@@ -52,19 +52,25 @@ def _hr(char: str = "─", w: int = 64):
     print(f"{_D}{char * w}{_R}")
 
 
-def _send_with_retry(chat, message, max_retries: int = 5):
-    """Send a message, sleeping and retrying on 429 rate-limit errors."""
+def _send_with_retry(chat, message, max_retries: int = 7):
+    """Send a message, retrying on 429 rate-limit and 503 server-overload errors."""
     for attempt in range(max_retries):
         try:
             return chat.send_message(message)
         except Exception as e:
             msg = str(e)
-            if "429" not in msg and "RESOURCE_EXHAUSTED" not in msg:
+            is_rate_limit = "429" in msg or "RESOURCE_EXHAUSTED" in msg
+            is_unavailable = "503" in msg or "UNAVAILABLE" in msg
+            if not is_rate_limit and not is_unavailable:
                 raise
-            # Extract retry delay from the error message if present
-            match = re.search(r"retryDelay.*?(\d+)s", msg)
-            delay = int(match.group(1)) + 2 if match else 30 * (attempt + 1)
-            print(f"\n{_YL}[rate limit] waiting {delay}s before retry {attempt + 1}/{max_retries}...{_R}")
+            if is_rate_limit:
+                match = re.search(r"retryDelay.*?(\d+)s", msg)
+                delay = int(match.group(1)) + 2 if match else 30 * (attempt + 1)
+                label = "rate limit"
+            else:
+                delay = 15 * (2 ** attempt)  # 15, 30, 60, 120 … seconds
+                label = "server overload (503)"
+            print(f"\n{_YL}[{label}] waiting {delay}s before retry {attempt + 1}/{max_retries}...{_R}")
             time.sleep(delay)
     return chat.send_message(message)  # final attempt, let it raise
 
