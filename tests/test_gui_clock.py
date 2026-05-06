@@ -79,7 +79,7 @@ _core_mod.Qt = _Qt
 
 for _name, _stub in [
     ("PyQt5", MagicMock()),
-    ("adhan_clock", MagicMock()),
+    ("prayer_engine", MagicMock()),
     ("gui", MagicMock()),
     ("gui.settings", MagicMock()),
     ("hijridate", MagicMock()),
@@ -96,7 +96,7 @@ UTC = pytz.UTC
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 class _FakeDt:
-    """Wraps a real datetime and exposes .astimezone() that returns itself."""
+    """Wraps a real datetime; .astimezone() returns it unchanged."""
     def __init__(self, dt: _RealDatetime):
         self._dt = dt
 
@@ -104,24 +104,29 @@ class _FakeDt:
         return self._dt
 
 
-def _make_pt(now: _RealDatetime, *offsets):
-    """Return a mock prayer_times with five real-datetime attributes.
+def _make_pt(now: _RealDatetime, fajr_h, dhuhr_h, asr_h, maghrib_h, isha_h):
+    """Build a mock prayer_times with six real-datetime attributes.
 
-    offsets: (fajr_h, dhuhr_h, asr_h, maghrib_h, isha_h) relative to `now`.
+    Sunrise is placed 1 h after Fajr (not counted in next-prayer logic).
     """
     pt = MagicMock()
-    for name, off in zip(("fajr", "dhuhr", "asr", "maghrib", "isha"), offsets):
+    for name, off in zip(
+        ("fajr", "dhuhr", "asr", "maghrib", "isha"),
+        (fajr_h, dhuhr_h, asr_h, maghrib_h, isha_h),
+    ):
         setattr(pt, name, _FakeDt(now + timedelta(hours=off)))
+    pt.sunrise = _FakeDt(now + timedelta(hours=fajr_h + 1))
     return pt
 
 
-class _FixedDatetime:
-    """Drop-in replacement for the `datetime` class with a pinned .now()."""
-    def __init__(self, fixed: _RealDatetime):
-        self._fixed = fixed
-
-    def now(self, tz=None):
-        return self._fixed
+def _make_clock(now: _RealDatetime = None, prayer_times=None):
+    """Return a pre-configured mock PrayerClock."""
+    clock = MagicMock()
+    clock.timezone = UTC
+    clock.config = {"city": "TestCity"}
+    clock.get_current_time.return_value = now or _RealDatetime(2023, 10, 27, 10, 0, 0, tzinfo=UTC)
+    clock.get_prayer_times.return_value = prayer_times
+    return clock
 
 
 # ── get_location_details ──────────────────────────────────────────────────────
@@ -160,13 +165,12 @@ def test_get_location_network_error(monkeypatch):
     assert tz == "UTC"
 
 
-# ── AdhanClockUI fixtures ─────────────────────────────────────────────────────
+# ── AdhanClockUI fixture ──────────────────────────────────────────────────────
 
 @pytest.fixture
 def widget():
-    with patch("gui_clock.get_location_details", return_value=("TestCity", "UTC")), \
-         patch("gui_clock.get_times", return_value=None):
-        return AdhanClockUI()
+    """Widget with a mock clock that returns no prayer times."""
+    return AdhanClockUI(clock=_make_clock())
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
@@ -180,72 +184,71 @@ def test_prayer_labels_start_with_placeholder(widget):
         assert lbl.text() == "--:--"
 
 
+def test_sunrise_label_exists_and_starts_with_placeholder(widget):
+    assert widget.sunrise_label is not None
+    assert widget.sunrise_label.text() == "--:--"
+
+
 # ── update_display ────────────────────────────────────────────────────────────
 
-def test_update_display_returns_early_without_local_tz(widget):
-    widget.local_tz = None
+def test_update_display_no_crash_when_get_times_returns_none(widget):
+    widget.clock.get_prayer_times.return_value = None
     widget.update_display()  # must not raise
-
-
-def test_update_display_returns_early_when_get_times_is_none(widget):
-    now = _RealDatetime(2023, 10, 27, 10, 0, 0, tzinfo=UTC)
-    with patch("gui_clock.datetime", _FixedDatetime(now)), \
-         patch("gui_clock.get_times", return_value=None):
-        widget.local_tz = UTC
-        widget.update_display()  # must not raise
     assert widget.countdown_label._text == "Next Prayer in..."  # unchanged
 
 
 def test_update_display_countdown_includes_hours(widget):
     now = _RealDatetime(2023, 10, 27, 10, 0, 0, tzinfo=UTC)
-    # Asr is 2 h in the future; Fajr and Dhuhr already passed
-    pt = _make_pt(now, -5, -3, 2, 4, 6)
-    with patch("gui_clock.datetime", _FixedDatetime(now)), \
-         patch("gui_clock.get_times", return_value=pt):
-        widget.local_tz = UTC
-        widget.update_display()
+    pt = _make_pt(now, -5, -3, 2, 4, 6)   # Asr is 2 h away
+    widget.clock.get_current_time.return_value = now
+    widget.clock.get_prayer_times.return_value = pt
+    widget.update_display()
     assert widget.countdown_label._text == "Asr in 2h 0m 0s"
 
 
 def test_update_display_countdown_omits_hours_when_zero(widget):
     now = _RealDatetime(2023, 10, 27, 10, 0, 0, tzinfo=UTC)
-    # Maghrib is 30 min away; everything before it has passed
-    pt = _make_pt(now, -5, -3, -1, 0.5, 6)
-    with patch("gui_clock.datetime", _FixedDatetime(now)), \
-         patch("gui_clock.get_times", return_value=pt):
-        widget.local_tz = UTC
-        widget.update_display()
+    pt = _make_pt(now, -5, -3, -1, 0.5, 6)   # Maghrib is 30 min away
+    widget.clock.get_current_time.return_value = now
+    widget.clock.get_prayer_times.return_value = pt
+    widget.update_display()
     assert widget.countdown_label._text == "Maghrib in 30m 0s"
 
 
 def test_update_display_all_prayers_done(widget):
     now = _RealDatetime(2023, 10, 27, 23, 0, 0, tzinfo=UTC)
-    pt = _make_pt(now, -18, -10, -7, -4, -2)  # every prayer in the past
-    with patch("gui_clock.datetime", _FixedDatetime(now)), \
-         patch("gui_clock.get_times", return_value=pt):
-        widget.local_tz = UTC
-        widget.update_display()
+    pt = _make_pt(now, -18, -10, -7, -4, -2)   # every prayer in the past
+    widget.clock.get_current_time.return_value = now
+    widget.clock.get_prayer_times.return_value = pt
+    widget.update_display()
     assert widget.countdown_label._text == "All prayers done for today."
 
 
 def test_update_display_prayer_labels_show_formatted_times(widget):
     now = _RealDatetime(2023, 10, 27, 10, 0, 0, tzinfo=UTC)
-    # Fajr at 05:00, Dhuhr at 13:00 (relative to now at 10:00)
-    pt = _make_pt(now, -5, 3, 6, 8, 10)
-    with patch("gui_clock.datetime", _FixedDatetime(now)), \
-         patch("gui_clock.get_times", return_value=pt):
-        widget.local_tz = UTC
-        widget.update_display()
+    pt = _make_pt(now, -5, 3, 6, 8, 10)   # Fajr=05:00, Dhuhr=13:00
+    widget.clock.get_current_time.return_value = now
+    widget.clock.get_prayer_times.return_value = pt
+    widget.update_display()
     assert widget.prayer_labels["Fajr"].text() == "05:00"
     assert widget.prayer_labels["Dhuhr"].text() == "13:00"
+
+
+def test_update_display_sunrise_label_updated(widget):
+    now = _RealDatetime(2023, 10, 27, 10, 0, 0, tzinfo=UTC)
+    pt = _make_pt(now, -5, 3, 6, 8, 10)   # Fajr=-5h → 05:00, sunrise=-4h → 06:00
+    widget.clock.get_current_time.return_value = now
+    widget.clock.get_prayer_times.return_value = pt
+    widget.update_display()
+    assert widget.sunrise_label.text() == "06:00"
 
 
 # ── refresh_location ──────────────────────────────────────────────────────────
 
 def test_refresh_location_updates_location_label(widget):
-    with patch("gui_clock.get_location_details", return_value=("Cairo", "Africa/Cairo")), \
-         patch("gui_clock.get_times", return_value=None):
-        widget.refresh_location()
+    widget.clock.config = {"city": "Cairo"}
+    widget.clock.timezone = "Africa/Cairo"
+    widget.refresh_location()
     assert "Cairo" in widget.location_label._text
     assert "Africa/Cairo" in widget.location_label._text
 
