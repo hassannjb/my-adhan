@@ -1,9 +1,9 @@
 import sys
 import requests
 import json
-from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel,
+from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QLabel,
                              QGridLayout, QGroupBox, QPushButton, QSizePolicy)
-from PyQt6.QtCore import QTimer, Qt
+from PyQt5.QtCore import QTimer, Qt
 from datetime import datetime
 import pytz
 # --- IMPORTING YOUR WORKING LOGIC ---
@@ -52,27 +52,27 @@ class AdhanClockUI(QWidget):
         layout = QVBoxLayout()
         # Adjusted margins to keep things centered but not too far apart
         layout.setContentsMargins(50, 50, 50, 50)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setAlignment(Qt.AlignCenter)
 
         # UI Components
         self.date_label = QLabel("Loading Date...")
-        self.date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.date_label.setAlignment(Qt.AlignCenter)
         self.date_label.setStyleSheet("color: #aaaaaa; font-size: 18px;")
         layout.addWidget(self.date_label)
 
         self.time_label = QLabel("00:00:00")
-        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_label.setAlignment(Qt.AlignCenter)
         self.time_label.setStyleSheet("font-weight: bold; color: #ffffff; font-size: 48px;")
         layout.addWidget(self.time_label)
 
         self.location_label = QLabel("Detecting Location...")
-        self.location_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.location_label.setAlignment(Qt.AlignCenter)
         self.location_label.setStyleSheet("color: #888888; font-size: 16px;")
         layout.addWidget(self.location_label)
 
         # Countdown Label
         self.countdown_label = QLabel("Next Prayer in...")
-        self.countdown_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.countdown_label.setAlignment(Qt.AlignCenter)
         self.countdown_label.setStyleSheet("color: #3498db; font-weight: bold; font-size: 20px; padding: 10px;")
         layout.addWidget(self.countdown_label)
 
@@ -85,10 +85,10 @@ class AdhanClockUI(QWidget):
 
         # --- FIX: Ensure the box has a minimum size ---
         prayer_group.setMinimumHeight(200)
-        prayer_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        prayer_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
 
         prayer_layout = QGridLayout()
-        prayer_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prayer_layout.setAlignment(Qt.AlignCenter)
         prayer_layout.setSpacing(10)
 
         self.prayer_labels = {}
@@ -97,11 +97,11 @@ class AdhanClockUI(QWidget):
         for i, prayer in enumerate(prayers):
             name_lbl = QLabel(prayer)
             name_lbl.setStyleSheet("font-weight: bold; color: #aaaaaa; font-size: 16px;")
-            name_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            name_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
             time_lbl = QLabel("--:--")
             time_lbl.setStyleSheet("color: #ffffff; font-size: 16px;")
-            time_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            time_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
             prayer_layout.addWidget(name_lbl, i, 0)
             prayer_layout.addWidget(time_lbl, i, 1)

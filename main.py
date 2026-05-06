@@ -1,4 +1,3 @@
-```python
 import json
 import os
 from datetime import datetime, timedelta
@@ -135,4 +134,3 @@ if __name__ == "__main__":
     # Example of how the app would be run
     app = AdhanClockApp()
     app.run_gui()
-```

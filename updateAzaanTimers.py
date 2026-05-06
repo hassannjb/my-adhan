@@ -38,7 +38,7 @@ def fetch_prayer_times(city, country, method="2"):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching prayer times for {city}, {country}: {e}")
         return None
-    except (KeyError, IndexError) as e:
+    except (KeyError, IndexError, ValueError) as e:
         print(f"Error parsing API response structure for {city}, {country}: {e}")
         return None
 
@@ -53,8 +53,10 @@ def save_prayer_times(filepath, prayer_times):
         print("No prayer times data to save.")
         return False
     try:
-        # Ensure the directory exists
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        # Ensure the directory exists (dirname is empty for bare filenames)
+        dirname = os.path.dirname(filepath)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
         with open(filepath, 'w') as f:
             json.dump(prayer_times, f, indent=4)
         print(f"Prayer times saved to {filepath}")
