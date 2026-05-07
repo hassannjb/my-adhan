@@ -26,7 +26,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from query import INDEX_PATH, answer, load_clients, load_index
+from query import INDEX_PATH, answer, answer_stream, load_clients, load_index
 
 # ── Built-in evals ────────────────────────────────────────────────────────────
 # Format: (question, list_of_keywords_that_must_appear_in_answer)
@@ -92,8 +92,11 @@ def interactive_loop(records, matrix, voyage, claude):
         debug = user_input.lower().startswith("debug:")
         question = user_input[6:].strip() if debug else user_input
 
-        resp, chunks = answer(question, records, matrix, voyage, claude)
-        print(f"\nAssistant: {resp}\n")
+        stream, chunks = answer_stream(question, records, matrix, voyage, claude)
+        print("\nAssistant: ", end="", flush=True)
+        for token in stream:
+            print(token, end="", flush=True)
+        print("\n")
 
         if debug:
             print("── Retrieved chunks ──")

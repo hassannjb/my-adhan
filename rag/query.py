@@ -73,30 +73,53 @@ def build_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _build_messages(question: str, chunks: list[dict]) -> list[dict]:
+    context = build_context(chunks)
+    return [{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}]
+
+
 def answer(question: str, records: list[dict], matrix: np.ndarray,
            voyage: voyageai.Client, claude: anthropic.Anthropic,
            top_k: int = TOP_K) -> tuple[str, list[dict]]:
-    """
-    Full RAG pipeline: retrieve → augment → generate.
-    Returns (answer_text, retrieved_chunks) so callers can inspect what was used.
-    """
+    """Full RAG pipeline, blocking. Returns (answer_text, retrieved_chunks)."""
     chunks = retrieve(question, records, matrix, voyage, top_k)
-    context = build_context(chunks)
-
-    messages = [
-        {
-            "role": "user",
-            "content": f"Context:\n{context}\n\nQuestion: {question}"
-        }
-    ]
-
     response = claude.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
         system=SYSTEM_PROMPT,
-        messages=messages,
+        messages=_build_messages(question, chunks),
     )
     return response.content[0].text, chunks
+
+
+def answer_stream(question: str, records: list[dict], matrix: np.ndarray,
+                  voyage: voyageai.Client, claude: anthropic.Anthropic,
+                  top_k: int = TOP_K):
+    """
+    Full RAG pipeline, streaming.
+
+    Returns (token_generator, retrieved_chunks).  Iterate the generator to
+    receive text tokens as Claude produces them — no waiting for the full
+    response before the first word appears.
+
+    WHY STREAMING MATTERS:
+      Without streaming, the user sees nothing for 2–5 seconds, then the full
+      answer dumps at once.  With streaming, the first token arrives in ~300ms.
+      The total time is the same, but perceived latency drops dramatically.
+      This is why every chat UI (Claude, ChatGPT, Copilot) streams by default.
+    """
+    chunks = retrieve(question, records, matrix, voyage, top_k)
+
+    def _tokens():
+        with claude.messages.stream(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            system=SYSTEM_PROMPT,
+            messages=_build_messages(question, chunks),
+        ) as stream:
+            yield from stream.text_stream
+
+    return _tokens(), chunks
 
 
 def load_clients() -> tuple[voyageai.Client, anthropic.Anthropic]:
