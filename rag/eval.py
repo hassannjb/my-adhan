@@ -119,10 +119,12 @@ JUDGE_TOOL = {
             "grounding": {
                 "type": "integer",
                 "description": (
-                    "0 = answer contains hallucinated facts not in the source context. "
-                    "1 = mostly grounded but adds unsupported claims. "
-                    "2 = well grounded with minor additions. "
-                    "3 = answer stays strictly within the provided context."
+                    "Does the candidate invent facts that could not appear in any "
+                    "reasonable Islamic prayer times knowledge base? "
+                    "0 = clear hallucinations (made-up angles, invented rules, wrong numbers). "
+                    "1 = plausible but unverifiable claims mixed in. "
+                    "2 = nearly all claims are standard prayer knowledge. "
+                    "3 = every claim is either in the reference or well-established prayer knowledge."
                 ),
             },
             "completeness": {
@@ -144,10 +146,15 @@ JUDGE_TOOL = {
 }
 
 JUDGE_SYSTEM = (
-    "You are an impartial evaluator of question-answering systems. "
+    "You are an impartial evaluator of a RAG (retrieval-augmented generation) system "
+    "for Islamic prayer times. "
     "You will be given a question, a reference answer, and a candidate answer. "
-    "Score the candidate on accuracy, grounding, and completeness using the provided tool. "
-    "Be strict: a score of 3 means the candidate fully matches the reference on that dimension."
+    "Score using the provided tool. Rules: "
+    "(1) Accuracy and completeness are measured against the reference answer. "
+    "(2) Grounding measures whether the candidate invents implausible facts — "
+    "do NOT penalise the candidate for adding extra correct Islamic knowledge "
+    "beyond what the reference mentions, only penalise clear hallucinations or "
+    "numerically wrong claims."
 )
 
 
