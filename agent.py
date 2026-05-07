@@ -49,7 +49,7 @@ REPO_PATH = Path(os.path.dirname(os.path.abspath(__file__)))
 PROVIDER_CLAUDE = "claude"
 PROVIDER_GEMINI = "gemini"
 DEFAULT_PROVIDER  = PROVIDER_CLAUDE
-DEFAULT_CLAUDE_MODEL = "claude-opus-4-7"
+DEFAULT_CLAUDE_MODEL = "claude-haiku-4-5"
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
 
 MAX_REVIEW_ROUNDS = 3
