@@ -40,6 +40,7 @@ class _Layout:
     def addWidget(self, *a): pass
     def addStretch(self, *a): pass
     def setSpacing(self, *a): pass
+    def addLayout(self, *a): pass
 
 
 class _GroupBox(_W):
@@ -49,6 +50,34 @@ class _GroupBox(_W):
 
 class _Button(_W):
     clicked = MagicMock()
+
+
+class _LineEdit(_W):
+    def __init__(self, *a, **kw):
+        self._text = ""
+        self._style = ""
+        self.returnPressed = MagicMock()
+    def setPlaceholderText(self, *a): pass
+    def text(self): return self._text
+    def setText(self, t): self._text = t
+    def setEnabled(self, *a): pass
+    def clear(self): self._text = ""
+
+
+class _TextEdit(_W):
+    def __init__(self, *a, **kw):
+        self._text = ""
+        self._style = ""
+        self._placeholder = ""
+    def setReadOnly(self, *a): pass
+    def setPlaceholderText(self, t): self._placeholder = t
+    def placeholderText(self): return self._placeholder
+    def setMinimumHeight(self, *a): pass
+    def setMaximumHeight(self, *a): pass
+    def setPlainText(self, t): self._text = t
+    def insertPlainText(self, t): self._text += t
+    def ensureCursorVisible(self): pass
+    def text(self): return self._text
 
 
 class _SizePolicy:
@@ -63,19 +92,33 @@ class _Qt:
     AlignVCenter = 32
 
 
+class _Thread:
+    def __init__(self, *a, **kw): pass
+    def start(self, *a): pass
+    def isRunning(self): return False
+
+
+def _pyqtSignal(*a, **kw): return MagicMock()
+
+
 _widgets_mod = MagicMock()
 _widgets_mod.QWidget = _W
 _widgets_mod.QLabel = _Label
 _widgets_mod.QVBoxLayout = _Layout
+_widgets_mod.QHBoxLayout = _Layout
 _widgets_mod.QGridLayout = _Layout
 _widgets_mod.QGroupBox = _GroupBox
 _widgets_mod.QPushButton = _Button
+_widgets_mod.QLineEdit = _LineEdit
+_widgets_mod.QTextEdit = _TextEdit
 _widgets_mod.QSizePolicy = _SizePolicy
 _widgets_mod.QApplication = MagicMock()
 
 _core_mod = MagicMock()
 _core_mod.QTimer = _Timer
 _core_mod.Qt = _Qt
+_core_mod.QThread = _Thread
+_core_mod.pyqtSignal = _pyqtSignal
 
 for _name, _stub in [
     ("PyQt5", MagicMock()),
