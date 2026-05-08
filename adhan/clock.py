@@ -20,7 +20,9 @@ from adhan.notifications import play_adhan, send_notification
 
 logger = logging.getLogger(__name__)
 
-_ADHAN_AUDIO = Path(__file__).parent.parent / "lib" / "makkah_adhan.mp3"
+_LIB = Path(__file__).parent.parent / "lib"
+_FAJR_AUDIO  = _LIB / "fajr.mp3"
+_ADHAN_AUDIO = _LIB / "makkah_adhan.mp3"
 
 
 class PrayerClock:
@@ -73,6 +75,7 @@ class PrayerClock:
         params = build_params(self._config)
         return calculate(target_date, self._coords, params, self._tz)
 
-    def play_adhan(self) -> None:
+    def play_adhan(self, prayer_name: str = "") -> None:
         send_notification("Adhaan Clock", "Time for Prayer")
-        play_adhan(_ADHAN_AUDIO)
+        audio = _FAJR_AUDIO if prayer_name.lower() == "fajr" else _ADHAN_AUDIO
+        play_adhan(audio)

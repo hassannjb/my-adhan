@@ -56,7 +56,7 @@ def run() -> None:
             delta = abs((p_time.replace(tzinfo=None) - now.replace(tzinfo=None)).total_seconds())
             if delta < _TRIGGER_WINDOW:
                 logger.info("Time for %s!", name)
-                clock.play_adhan()
+                clock.play_adhan(name)
                 time.sleep(_ADHAN_COOLDOWN)
                 break
 
