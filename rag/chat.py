@@ -33,7 +33,7 @@ from pathlib import Path
 _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
 
-from query import INDEX_PATH, answer, answer_stream, load_clients, load_index  # noqa: E402
+from rag.query import INDEX_PATH, answer, answer_stream, load_clients, load_index  # noqa: E402
 
 # ── Prayer-time tool definition ───────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ _RAG_SYSTEM = (
 
 def _classify(question: str, claude) -> str:
     """Returns 'TOOL' or 'RAG'. Costs ~10 output tokens."""
-    from query import CLAUDE_MODEL
+    from rag.query import CLAUDE_MODEL
     resp = claude.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=5,
@@ -106,7 +106,7 @@ def _classify(question: str, claude) -> str:
 
 def _answer_via_tool(question: str, claude) -> str:
     """Force-call the prayer tool and return a formatted answer."""
-    from query import CLAUDE_MODEL
+    from rag.query import CLAUDE_MODEL
 
     # Step 1: force Claude to fill in the tool arguments from the question
     resp = claude.messages.create(
@@ -149,7 +149,7 @@ def _answer_via_tool(question: str, claude) -> str:
 
 def _answer_via_rag(question: str, records, matrix, voyage, claude) -> str:
     """Standard RAG: retrieve chunks → answer with context."""
-    from query import CLAUDE_MODEL, build_context, retrieve
+    from rag.query import CLAUDE_MODEL, build_context, retrieve
     chunks = retrieve(question, records, matrix, voyage)
     context = build_context(chunks)
     resp = claude.messages.create(
@@ -175,7 +175,7 @@ def answer_stream_with_tools(
     GUI _RagWorker doesn't need to change.  Tool answers are emitted as a single
     token; RAG answers stream normally.
     """
-    from query import answer_stream
+    from rag.query import answer_stream
     route = _classify(question, claude)
     if route == "TOOL":
         text = _answer_via_tool(question, claude)
