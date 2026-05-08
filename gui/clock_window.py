@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QGridLayout, QGroupBox, QPushButton,
-                             QSizePolicy, QLineEdit, QTextEdit, QScrollArea)
+                             QSizePolicy, QLineEdit, QTextEdit, QScrollArea, QMenu)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 
 from adhan import PrayerClock
@@ -24,11 +24,15 @@ from utils.display_helper import format_date_display, format_countdown
 _ADHAN_TRIGGER_WINDOW = 30   # seconds after prayer time to auto-play adhan
 
 _BTN_STYLE = (
-    "padding: 8px 12px; border-radius: 4px; font-size: 13px; color: white;"
+    "padding: 5px 10px; border-radius: 4px; font-size: 12px; color: white;"
 )
 _BTN_PLAY     = _BTN_STYLE + "background-color: #27ae60;"
 _BTN_STOP     = _BTN_STYLE + "background-color: #c0392b;"
 _BTN_SUPPRESS = _BTN_STYLE + "background-color: #e67e22;"
+_BTN_GEAR     = (
+    "padding: 5px 8px; border-radius: 4px; font-size: 14px; "
+    "background-color: #444444; color: white;"
+)
 
 
 # ── RAG background worker ─────────────────────────────────────────────────────
@@ -101,9 +105,45 @@ class AdhanClockUI(QWidget):
         content = QWidget()
         content.setStyleSheet("background-color: #2b2b2b;")
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(50, 50, 50, 50)
+        layout.setContentsMargins(30, 16, 30, 30)
         layout.setAlignment(Qt.AlignTop)
 
+        # ── Top bar: adhan controls (left) + gear button (right) ──────────
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(6)
+
+        self.play_btn = QPushButton("▶ Play")
+        self.play_btn.setStyleSheet(_BTN_PLAY)
+        self.play_btn.clicked.connect(self._play_adhan)
+        top_bar.addWidget(self.play_btn)
+
+        self.stop_btn = QPushButton("■ Stop")
+        self.stop_btn.setStyleSheet(_BTN_STOP)
+        self.stop_btn.clicked.connect(self._stop_adhan)
+        top_bar.addWidget(self.stop_btn)
+
+        self.suppress_btn = QPushButton("🔉 Suppress")
+        self.suppress_btn.setStyleSheet(_BTN_SUPPRESS)
+        self.suppress_btn.clicked.connect(self._suppress_current)
+        top_bar.addWidget(self.suppress_btn)
+
+        top_bar.addStretch()
+
+        self.gear_btn = QPushButton("⚙")
+        self.gear_btn.setStyleSheet(_BTN_GEAR)
+        self.gear_btn.clicked.connect(self._open_settings_menu)
+        top_bar.addWidget(self.gear_btn)
+
+        layout.addLayout(top_bar)
+        layout.addSpacing(10)
+
+        # ── Hijri date ─────────────────────────────────────────────────────
+        self.hijri_label = QLabel("")
+        self.hijri_label.setAlignment(Qt.AlignCenter)
+        self.hijri_label.setStyleSheet("color: #c0a060; font-size: 16px;")
+        layout.addWidget(self.hijri_label)
+
+        # ── Gregorian date / time / location / countdown ───────────────────
         self.date_label = QLabel("Loading Date...")
         self.date_label.setAlignment(Qt.AlignCenter)
         self.date_label.setStyleSheet("color: #aaaaaa; font-size: 18px;")
@@ -132,22 +172,6 @@ class AdhanClockUI(QWidget):
         layout.addWidget(self._build_prayer_grid())
         layout.addSpacing(16)
 
-        self.settings_button = QPushButton("Edit Settings")
-        self.settings_button.setStyleSheet(
-            "background-color: #555555; color: white; padding: 10px; "
-            "border-radius: 5px; font-size: 16px;"
-        )
-        self.settings_button.clicked.connect(self._open_settings)
-        layout.addWidget(self.settings_button)
-
-        self.refresh_button = QPushButton("Refresh Location / Times")
-        self.refresh_button.setStyleSheet(
-            "background-color: #34495e; color: white; padding: 10px; "
-            "border-radius: 5px; font-size: 16px;"
-        )
-        self.refresh_button.clicked.connect(self.refresh_location)
-        layout.addWidget(self.refresh_button)
-        layout.addWidget(self._build_adhan_controls())
         layout.addWidget(self._build_rag_section())
 
         scroll = QScrollArea()
@@ -218,33 +242,6 @@ class AdhanClockUI(QWidget):
         outer.addLayout(row1)
         outer.addLayout(row2)
         group.setLayout(outer)
-        return group
-
-    def _build_adhan_controls(self) -> QGroupBox:
-        group = QGroupBox("Adhan Controls")
-        group.setStyleSheet(
-            "color: white; border: 1px solid #555555; border-radius: 5px; "
-            "padding: 8px; font-size: 14px;"
-        )
-        row = QHBoxLayout()
-        row.setSpacing(8)
-
-        self.play_btn = QPushButton("▶  Play")
-        self.play_btn.setStyleSheet(_BTN_PLAY)
-        self.play_btn.clicked.connect(self._play_adhan)
-        row.addWidget(self.play_btn)
-
-        self.stop_btn = QPushButton("■  Stop")
-        self.stop_btn.setStyleSheet(_BTN_STOP)
-        self.stop_btn.clicked.connect(self._stop_adhan)
-        row.addWidget(self.stop_btn)
-
-        self.suppress_btn = QPushButton("🔉  Suppress")
-        self.suppress_btn.setStyleSheet(_BTN_SUPPRESS)
-        self.suppress_btn.clicked.connect(self._suppress_current)
-        row.addWidget(self.suppress_btn)
-
-        group.setLayout(row)
         return group
 
     def _build_rag_section(self) -> QGroupBox:
@@ -351,10 +348,23 @@ class AdhanClockUI(QWidget):
         self.clock.set_volume(VOLUME_NORMAL)
         self.suppress_btn.setEnabled(True)
 
-    def _open_settings(self) -> None:
-        dialog = SettingsDialog(self.clock.config, self)
-        if dialog.exec():
-            save_config(dialog.config, self.clock.config_path)
+    def _open_settings_menu(self) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #3a3a3a; color: white; border: 1px solid #555; }"
+            "QMenu::item:selected { background-color: #555555; }"
+        )
+        edit_action = menu.addAction("Edit Settings")
+        refresh_action = menu.addAction("Refresh Location")
+        action = menu.exec_(self.gear_btn.mapToGlobal(
+            self.gear_btn.rect().bottomLeft()
+        ))
+        if action == edit_action:
+            dialog = SettingsDialog(self.clock.config, self)
+            if dialog.exec():
+                save_config(dialog.config, self.clock.config_path)
+                self.refresh_location()
+        elif action == refresh_action:
             self.refresh_location()
 
     def refresh_location(self) -> None:
@@ -369,6 +379,12 @@ class AdhanClockUI(QWidget):
         now = self.clock.get_current_time()
         self.time_label.setText(now.strftime("%H:%M:%S"))
         self.date_label.setText(format_date_display(now.date()))
+        try:
+            import hijridate
+            h = hijridate.Gregorian(now.year, now.month, now.day).to_hijri()
+            self.hijri_label.setText(f"{h.day} {h.month_name()} {h.year}")
+        except Exception:
+            self.hijri_label.setText("")
 
         pt = self.clock.get_prayer_times(now.date())
         if not pt:
@@ -458,6 +474,9 @@ class AdhanClockUI(QWidget):
 
     def resizeEvent(self, event) -> None:
         w = self.width()
+        self.hijri_label.setStyleSheet(
+            f"font-size: {max(14, w // 30)}px; color: #c0a060;"
+        )
         self.date_label.setStyleSheet(
             f"font-size: {max(16, w // 25)}px; color: #aaaaaa;"
         )

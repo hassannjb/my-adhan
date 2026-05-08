@@ -130,6 +130,7 @@ _widgets_mod.QLineEdit = _LineEdit
 _widgets_mod.QTextEdit = _TextEdit
 _widgets_mod.QSizePolicy = _SizePolicy
 _widgets_mod.QScrollArea = _W
+_widgets_mod.QMenu = MagicMock()
 _widgets_mod.QApplication = MagicMock()
 
 _core_mod = MagicMock()
