@@ -19,6 +19,10 @@ class _W:
     def setStyleSheet(self, s=""): self._style = s
     def setLayout(self, *a): pass
     def setSizePolicy(self, *a): pass
+    def setWidget(self, *a): pass
+    def setWidgetResizable(self, *a): pass
+    def setHorizontalScrollBarPolicy(self, *a): pass
+    def setVerticalScrollBarPolicy(self, *a): pass
     def width(self): return 450
     def resizeEvent(self, e): pass
 
@@ -45,6 +49,7 @@ class _Layout:
     def setAlignment(self, *a): pass
     def addWidget(self, *a): pass
     def addStretch(self, *a): pass
+    def addSpacing(self, *a): pass
     def setSpacing(self, *a): pass
     def addLayout(self, *a): pass
 
@@ -91,6 +96,7 @@ class _SizePolicy:
     Preferred = 0
     Minimum = 0
     Expanding = 1
+    Fixed = 2
 
 
 class _Qt:
@@ -98,6 +104,9 @@ class _Qt:
     AlignRight = 2
     AlignLeft = 1
     AlignVCenter = 32
+    AlignTop = 20
+    ScrollBarAlwaysOff = 1
+    ScrollBarAsNeeded = 0
 
 
 class _Thread:
@@ -120,6 +129,7 @@ _widgets_mod.QPushButton = _Button
 _widgets_mod.QLineEdit = _LineEdit
 _widgets_mod.QTextEdit = _TextEdit
 _widgets_mod.QSizePolicy = _SizePolicy
+_widgets_mod.QScrollArea = _W
 _widgets_mod.QApplication = MagicMock()
 
 _core_mod = MagicMock()

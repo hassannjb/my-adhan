@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QGridLayout, QGroupBox, QPushButton,
-                             QSizePolicy, QLineEdit, QTextEdit)
+                             QSizePolicy, QLineEdit, QTextEdit, QScrollArea)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 
 from adhan import PrayerClock
@@ -97,9 +97,12 @@ class AdhanClockUI(QWidget):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout()
+        # All content lives in a plain widget so it can be scrolled
+        content = QWidget()
+        content.setStyleSheet("background-color: #2b2b2b;")
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(50, 50, 50, 50)
-        layout.setAlignment(Qt.AlignCenter)
+        layout.setAlignment(Qt.AlignTop)
 
         self.date_label = QLabel("Loading Date...")
         self.date_label.setAlignment(Qt.AlignCenter)
@@ -125,9 +128,9 @@ class AdhanClockUI(QWidget):
         )
         layout.addWidget(self.countdown_label)
 
-        layout.addStretch(1)
-        layout.addWidget(self._build_prayer_grid(), 1)
-        layout.addStretch(1)
+        layout.addSpacing(16)
+        layout.addWidget(self._build_prayer_grid())
+        layout.addSpacing(16)
 
         self.settings_button = QPushButton("Edit Settings")
         self.settings_button.setStyleSheet(
@@ -146,7 +149,28 @@ class AdhanClockUI(QWidget):
         layout.addWidget(self.refresh_button)
         layout.addWidget(self._build_adhan_controls())
         layout.addWidget(self._build_rag_section())
-        self.setLayout(layout)
+
+        scroll = QScrollArea()
+        scroll.setWidget(content)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet("""
+            QScrollArea { border: none; background-color: #2b2b2b; }
+            QScrollBar:vertical {
+                background: #3a3a3a; width: 6px; border-radius: 3px; margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #666; border-radius: 3px; min-height: 20px;
+            }
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical { height: 0; }
+        """)
+
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        self.setLayout(outer)
 
     def _build_prayer_grid(self) -> QGroupBox:
         group = QGroupBox("Today's Times")
@@ -155,7 +179,7 @@ class AdhanClockUI(QWidget):
             "padding: 10px; font-size: 14px;"
         )
         group.setMinimumHeight(200)
-        group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         # Row 1: Fajr | Sunrise | Dhuhr
         # Row 2: Asr  | Maghrib | Isha
@@ -165,7 +189,7 @@ class AdhanClockUI(QWidget):
 
         for i, prayer in enumerate(all_prayers):
             container = QWidget()
-            container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             h = QHBoxLayout()
             h.setAlignment(Qt.AlignCenter)
             h.setContentsMargins(0, 0, 0, 0)
