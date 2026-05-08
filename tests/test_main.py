@@ -1,142 +1,172 @@
+"""
+Tests for the adhan domain package — config, models, and calculator.
+These are pure unit tests: no network, no GUI, no audio.
+"""
 import json
+from datetime import date
+from pathlib import Path
+
+import pytz
 import pytest
-from datetime import datetime
+from unittest.mock import patch
 
-from main import AdhanClockApp, PRAYER_TIMES_FILE
-
-VALID_TIMES = {
-    "Fajr": "05:00", "Sunrise": "06:15", "Dhuhr": "13:00",
-    "Asr": "16:30", "Sunset": "18:30", "Maghrib": "18:30", "Isha": "20:00",
-}
+from adhan.models import Config, Coordinates, PrayerSchedule
+from adhan.config import load_config, save_config
+from adhan.calculator import build_params, calculate
 
 
-@pytest.fixture
-def times_file(tmp_path):
-    p = tmp_path / "adhan_times.json"
-    p.write_text(json.dumps(VALID_TIMES))
-    return str(p)
+# ── adhan.models ──────────────────────────────────────────────────────────────
+
+def test_config_defaults():
+    c = Config()
+    assert c.fajr_angle == 15.0
+    assert c.isha_angle == 15.0
+    assert c.method == "NORTH_AMERICA"
+    assert c.city == "Unknown"
 
 
-@pytest.fixture
-def app(times_file):
-    return AdhanClockApp(prayer_times_filepath=times_file)
+def test_config_to_dict_round_trips():
+    c = Config(city="London", method="ISNA", fajr_angle=18.0, isha_angle=17.0)
+    d = c.to_dict()
+    assert d["city"] == "London"
+    assert d["method"] == "ISNA"
+    assert d["fajr_angle"] == 18.0
 
 
-# ── _load_prayer_times ────────────────────────────────────────────────────────
-
-def test_load_file_not_found(tmp_path):
-    a = AdhanClockApp(prayer_times_filepath=str(tmp_path / "missing.json"))
-    assert a.prayer_times is None
-
-
-def test_load_malformed_json(tmp_path):
-    p = tmp_path / "bad.json"
-    p.write_text("{not valid json")
-    a = AdhanClockApp(prayer_times_filepath=str(p))
-    assert a.prayer_times is None
+def test_coordinates_are_frozen():
+    coords = Coordinates(51.5, -0.1)
+    with pytest.raises(Exception):
+        coords.latitude = 0.0  # frozen dataclass
 
 
-def test_load_missing_required_keys(tmp_path):
-    # Fajr only — Dhuhr, Asr, Maghrib, Isha are missing
-    p = tmp_path / "partial.json"
-    p.write_text(json.dumps({"Fajr": "05:00", "Sunrise": "06:00"}))
-    a = AdhanClockApp(prayer_times_filepath=str(p))
-    assert a.prayer_times is None
+def test_prayer_schedule_as_dict_returns_six_keys():
+    tz = pytz.UTC
+    d = date(2024, 1, 1)
+    from datetime import datetime, timezone
+    now = datetime(2024, 1, 1, 6, 0, tzinfo=tz)
+    schedule = PrayerSchedule(
+        date=d, fajr=now, sunrise=now, dhuhr=now,
+        asr=now, maghrib=now, isha=now, timezone_name="UTC",
+    )
+    times = schedule.as_dict()
+    assert set(times.keys()) == {"Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"}
 
 
-def test_load_valid_file(app):
-    assert app.prayer_times == VALID_TIMES
-
-
-def test_reload_picks_up_updated_file(times_file):
-    a = AdhanClockApp(prayer_times_filepath=times_file)
-    updated = {**VALID_TIMES, "Fajr": "04:45"}
-    with open(times_file, "w") as f:
-        json.dump(updated, f)
-    assert a._load_prayer_times()["Fajr"] == "04:45"
-
-
-def test_default_filepath_constant():
-    assert PRAYER_TIMES_FILE == "adhan_times.json"
-
-
-# ── get_next_prayer_info ──────────────────────────────────────────────────────
-
-def test_next_prayer_no_times_loaded(tmp_path):
-    a = AdhanClockApp(prayer_times_filepath=str(tmp_path / "missing.json"))
-    name, t, dt = a.get_next_prayer_info(datetime(2023, 10, 27, 12, 0))
-    assert name == "No prayer times loaded"
-    assert t is None
-    assert dt is None
-
-
-def test_next_prayer_before_fajr(app):
-    name, t, dt = app.get_next_prayer_info(datetime(2023, 10, 27, 4, 0))
-    assert name == "Fajr"
-    assert t == "05:00"
-    assert dt == datetime(2023, 10, 27, 5, 0)
-
-
-def test_next_prayer_between_prayers(app):
-    name, t, dt = app.get_next_prayer_info(datetime(2023, 10, 27, 14, 0))
-    assert name == "Asr"
-    assert t == "16:30"
-    assert dt == datetime(2023, 10, 27, 16, 30)
-
-
-def test_next_prayer_exactly_at_prayer_time_advances_to_next(app):
-    # Strict > comparison means being exactly at Dhuhr skips it
-    name, t, _ = app.get_next_prayer_info(datetime(2023, 10, 27, 13, 0))
-    assert name == "Asr"
-    assert t == "16:30"
-
-
-def test_next_prayer_after_isha_wraps_to_tomorrow_fajr(app):
-    name, t, dt = app.get_next_prayer_info(datetime(2023, 10, 27, 21, 0))
-    assert name == "Fajr (Tomorrow)"
-    assert t == "05:00"
-    assert dt == datetime(2023, 10, 28, 5, 0)
-
-
-def test_next_prayer_skips_entry_with_invalid_time_format(tmp_path):
-    data = {**VALID_TIMES, "Sunrise": "not-a-time"}
-    p = tmp_path / "times.json"
-    p.write_text(json.dumps(data))
-    a = AdhanClockApp(prayer_times_filepath=str(p))
-    # At 12:00, Sunrise (invalid) is skipped; Dhuhr at 13:00 is next
-    name, t, _ = a.get_next_prayer_info(datetime(2023, 10, 27, 12, 0))
+def test_prayer_schedule_next_after_returns_next():
+    tz = pytz.UTC
+    from datetime import datetime, timedelta
+    base = datetime(2024, 1, 1, 8, 0, tzinfo=tz)
+    schedule = PrayerSchedule(
+        date=base.date(),
+        fajr=base - timedelta(hours=3),
+        sunrise=base - timedelta(hours=2),
+        dhuhr=base + timedelta(hours=4),
+        asr=base + timedelta(hours=7),
+        maghrib=base + timedelta(hours=9),
+        isha=base + timedelta(hours=11),
+        timezone_name="UTC",
+    )
+    name, dt = schedule.next_after(base)
     assert name == "Dhuhr"
-    assert t == "13:00"
+    assert dt == base + timedelta(hours=4)
 
 
-def test_next_prayer_invalid_fajr_returns_all_done(tmp_path):
-    data = {**VALID_TIMES, "Fajr": "bad-time"}
-    p = tmp_path / "times.json"
-    p.write_text(json.dumps(data))
-    a = AdhanClockApp(prayer_times_filepath=str(p))
-    # After all prayers for today, tries tomorrow's Fajr but it can't be parsed
-    name, t, dt = a.get_next_prayer_info(datetime(2023, 10, 27, 21, 0))
-    assert name == "All prayers done for today"
-    assert t is None
-    assert dt is None
+def test_prayer_schedule_next_after_returns_none_when_all_done():
+    tz = pytz.UTC
+    from datetime import datetime, timedelta
+    base = datetime(2024, 1, 1, 23, 0, tzinfo=tz)
+    schedule = PrayerSchedule(
+        date=base.date(),
+        fajr=base - timedelta(hours=17),
+        sunrise=base - timedelta(hours=16),
+        dhuhr=base - timedelta(hours=10),
+        asr=base - timedelta(hours=7),
+        maghrib=base - timedelta(hours=5),
+        isha=base - timedelta(hours=2),
+        timezone_name="UTC",
+    )
+    assert schedule.next_after(base) is None
 
 
-# ── format_time_display ───────────────────────────────────────────────────────
+# ── adhan.config ──────────────────────────────────────────────────────────────
 
-def test_format_with_valid_time(app):
-    assert app.format_time_display("Fajr", "05:00") == "Fajr: 05:00"
-
-
-def test_format_with_none_time_shows_na(app):
-    assert app.format_time_display("Maghrib", None) == "Maghrib: N/A"
+def test_load_config_missing_file_returns_defaults(tmp_path):
+    c = load_config(tmp_path / "nonexistent.json")
+    assert c.method == "NORTH_AMERICA"
+    assert c.fajr_angle == 15.0
 
 
-# ── run_gui ───────────────────────────────────────────────────────────────────
+def test_load_config_reads_values(tmp_path):
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps({
+        "method": "EGYPTIAN",
+        "fajr_angle": 19.5,
+        "isha_angle": 17.5,
+        "city": "Cairo",
+    }))
+    c = load_config(p)
+    assert c.method == "EGYPTIAN"
+    assert c.fajr_angle == 19.5
+    assert c.city == "Cairo"
 
-def test_run_gui_prints_expected_output(app, capsys):
-    app.run_gui()
-    out = capsys.readouterr().out
-    assert "Starting Adhan Clock GUI..." in out
-    assert "Current time:" in out
-    assert "Next Prayer:" in out
-    assert "GUI application logic would continue here..." in out
+
+def test_load_config_malformed_json_returns_defaults(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text("{bad json")
+    c = load_config(p)
+    assert c.method == "NORTH_AMERICA"
+
+
+def test_save_and_reload_config(tmp_path):
+    p = tmp_path / "config.json"
+    original = Config(method="MWL", fajr_angle=18.0, isha_angle=17.0, city="London")
+    save_config(original, p)
+    reloaded = load_config(p)
+    assert reloaded.method == "MWL"
+    assert reloaded.fajr_angle == 18.0
+    assert reloaded.city == "London"
+
+
+# ── adhan.calculator ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def london_params():
+    return build_params(Config(method="NORTH_AMERICA", fajr_angle=15.0, isha_angle=15.0))
+
+
+@pytest.fixture
+def london_coords():
+    return Coordinates(latitude=51.5074, longitude=-0.1278)
+
+
+def test_calculate_returns_prayer_schedule(london_coords, london_params):
+    tz = pytz.timezone("Europe/London")
+    schedule = calculate(date(2024, 6, 1), london_coords, london_params, tz)
+    assert isinstance(schedule, PrayerSchedule)
+    assert schedule.date == date(2024, 6, 1)
+    assert schedule.timezone_name == "Europe/London"
+
+
+def test_calculate_times_are_in_correct_order(london_coords, london_params):
+    tz = pytz.timezone("Europe/London")
+    s = calculate(date(2024, 6, 1), london_coords, london_params, tz)
+    assert s.fajr < s.sunrise < s.dhuhr < s.asr < s.maghrib < s.isha
+
+
+def test_calculate_times_are_timezone_aware(london_coords, london_params):
+    tz = pytz.timezone("Europe/London")
+    s = calculate(date(2024, 6, 1), london_coords, london_params, tz)
+    assert s.fajr.tzinfo is not None
+    assert s.isha.tzinfo is not None
+
+
+def test_build_params_uses_correct_method():
+    from adhanpy.calculation.CalculationMethod import CalculationMethod
+    params = build_params(Config(method="NORTH_AMERICA"))
+    assert params.method == CalculationMethod.NORTH_AMERICA
+
+
+def test_build_params_unknown_method_falls_back_to_north_america():
+    from adhanpy.calculation.CalculationMethod import CalculationMethod
+    params = build_params(Config(method="NONEXISTENT_METHOD"))
+    assert params.method == CalculationMethod.NORTH_AMERICA

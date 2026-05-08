@@ -1,54 +1,54 @@
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QDoubleSpinBox, QPushButton, QFormLayout, QComboBox
 
+from adhan.models import Config
+
+_METHODS = ["NORTH_AMERICA", "MUSLIM_WORLD_LEAGUE", "ISNA", "UMM_AL_QURA", "EGYPTIAN"]
+
 
 class SettingsDialog(QDialog):
-    def __init__(self, current_config, parent=None):
+    """
+    Modal settings editor.  Accepts a Config on open, exposes an updated
+    Config via .config after the user saves.
+    """
+
+    def __init__(self, config: Config, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setGeometry(200, 200, 300, 250)
         self.setStyleSheet("background-color: #2c3e50; color: white;")
+        self.config = config
 
-        self.config = current_config
         layout = QVBoxLayout()
         form_layout = QFormLayout()
 
-        # --- NEW: Method Dropdown ---
         self.method_input = QComboBox()
-        methods = ["NORTH_AMERICA", "MUSLIM_WORLD_LEAGUE", "ISNA", "UMM_AL_QURA", "EGYPTIAN"]
-        self.method_input.addItems(methods)
-
-        # Set current method
-        current_method = self.config.get('method', 'NORTH_AMERICA')
-        self.method_input.setCurrentText(current_method)
+        self.method_input.addItems(_METHODS)
+        self.method_input.setCurrentText(config.method)
         form_layout.addRow("Method:", self.method_input)
-        # ----------------------------
 
-        # Fajr Angle Input
         self.fajr_input = QDoubleSpinBox()
-        self.fajr_input.setValue(self.config['fajr_angle'])
+        self.fajr_input.setValue(config.fajr_angle)
         self.fajr_input.setRange(0.0, 30.0)
         self.fajr_input.setSingleStep(0.5)
         form_layout.addRow("Fajr Angle:", self.fajr_input)
 
-        # Isha Angle Input
         self.isha_input = QDoubleSpinBox()
-        self.isha_input.setValue(self.config['isha_angle'])
+        self.isha_input.setValue(config.isha_angle)
         self.isha_input.setRange(0.0, 30.0)
         self.isha_input.setSingleStep(0.5)
         form_layout.addRow("Isha Angle:", self.isha_input)
 
         layout.addLayout(form_layout)
 
-        # Save Button
-        self.save_button = QPushButton("Save Settings")
-        self.save_button.setStyleSheet("background-color: #27ae60; padding: 5px;")
-        self.save_button.clicked.connect(self.save_settings)
-        layout.addWidget(self.save_button)
+        save_button = QPushButton("Save Settings")
+        save_button.setStyleSheet("background-color: #27ae60; padding: 5px;")
+        save_button.clicked.connect(self._save)
+        layout.addWidget(save_button)
 
         self.setLayout(layout)
 
-    def save_settings(self):
-        self.config['method'] = self.method_input.currentText()
-        self.config['fajr_angle'] = self.fajr_input.value()
-        self.config['isha_angle'] = self.isha_input.value()
+    def _save(self) -> None:
+        self.config.method = self.method_input.currentText()
+        self.config.fajr_angle = self.fajr_input.value()
+        self.config.isha_angle = self.isha_input.value()
         self.accept()

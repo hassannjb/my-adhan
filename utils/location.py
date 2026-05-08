@@ -1,14 +1,12 @@
-import requests
+# Backward-compatibility shim.
+# The canonical implementation is now in adhan/location.py.
+from adhan.location import get_current_location
 
 
 def get_location_details():
-    """Uses IP Geolocation to get coordinates."""
-    try:
-        response = requests.get('http://ip-api.com/json/').json()
-        if response['status'] == 'success':
-            return response
-        else:
-            raise Exception("API Lookup Failed")
-    except:
-        # Fallback
-        return {'city': 'Unknown', 'timezone': 'UTC', 'lat': 0.0, 'lon': 0.0}
+    """Deprecated — use adhan.location.get_current_location()."""
+    coords, tz, city = get_current_location()
+    return {"city": city, "timezone": tz.zone, "lat": coords.latitude, "lon": coords.longitude}
+
+
+__all__ = ["get_location_details", "get_current_location"]
