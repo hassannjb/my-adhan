@@ -7,6 +7,7 @@ All business logic is delegated to adhan.PrayerClock and services.PrayerService.
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -16,8 +17,19 @@ from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 
 from adhan import PrayerClock
 from adhan.config import save_config
+from adhan.notifications import VOLUME_NORMAL, VOLUME_SUPPRESSED
 from gui.settings import SettingsDialog
 from utils.display_helper import format_date_display, format_countdown
+
+_ADHAN_TRIGGER_WINDOW = 30   # seconds after prayer time to auto-play adhan
+
+_BTN_STYLE = (
+    "padding: 8px 12px; border-radius: 4px; font-size: 13px; color: white;"
+)
+_BTN_PLAY     = _BTN_STYLE + "background-color: #27ae60;"
+_BTN_STOP     = _BTN_STYLE + "background-color: #c0392b;"
+_BTN_SUPPRESS = _BTN_STYLE + "background-color: #e67e22;"
+_BTN_RESTORE  = _BTN_STYLE + "background-color: #2980b9;"
 
 
 # ── RAG background worker ─────────────────────────────────────────────────────
@@ -72,6 +84,9 @@ class AdhanClockUI(QWidget):
         self.prayer_name_labels: list[QLabel] = []
         self.sunrise_label: QLabel | None = None
         self._rag_worker: _RagWorker | None = None
+        self._suppressed: bool = False
+        self._adhan_played: set[str] = set()
+        self._last_adhan_date = None
 
         self._build_ui()
         self._setup_timer()
@@ -128,7 +143,7 @@ class AdhanClockUI(QWidget):
         )
         self.refresh_button.clicked.connect(self.refresh_location)
         layout.addWidget(self.refresh_button)
-
+        layout.addWidget(self._build_adhan_controls())
         layout.addWidget(self._build_rag_section())
         self.setLayout(layout)
 
@@ -178,6 +193,33 @@ class AdhanClockUI(QWidget):
         outer.addLayout(row1)
         outer.addLayout(row2)
         group.setLayout(outer)
+        return group
+
+    def _build_adhan_controls(self) -> QGroupBox:
+        group = QGroupBox("Adhan Controls")
+        group.setStyleSheet(
+            "color: white; border: 1px solid #555555; border-radius: 5px; "
+            "padding: 8px; font-size: 14px;"
+        )
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        self.play_btn = QPushButton("▶  Play")
+        self.play_btn.setStyleSheet(_BTN_PLAY)
+        self.play_btn.clicked.connect(self._play_adhan)
+        row.addWidget(self.play_btn)
+
+        self.stop_btn = QPushButton("■  Stop")
+        self.stop_btn.setStyleSheet(_BTN_STOP)
+        self.stop_btn.clicked.connect(self._stop_adhan)
+        row.addWidget(self.stop_btn)
+
+        self.suppress_btn = QPushButton("🔉  Suppress")
+        self.suppress_btn.setStyleSheet(_BTN_SUPPRESS)
+        self.suppress_btn.clicked.connect(self._toggle_suppress)
+        row.addWidget(self.suppress_btn)
+
+        group.setLayout(row)
         return group
 
     def _build_rag_section(self) -> QGroupBox:
@@ -255,6 +297,25 @@ class AdhanClockUI(QWidget):
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
+    def _play_adhan(self) -> None:
+        volume = VOLUME_SUPPRESSED if self._suppressed else VOLUME_NORMAL
+        threading.Thread(target=lambda: self.clock.play_adhan(volume=volume),
+                         daemon=True).start()
+
+    def _stop_adhan(self) -> None:
+        self.clock.stop_adhan()
+
+    def _toggle_suppress(self) -> None:
+        self._suppressed = not self._suppressed
+        if self._suppressed:
+            self.clock.set_volume(VOLUME_SUPPRESSED)
+            self.suppress_btn.setText("🔊  Restore")
+            self.suppress_btn.setStyleSheet(_BTN_RESTORE)
+        else:
+            self.clock.set_volume(VOLUME_NORMAL)
+            self.suppress_btn.setText("🔉  Suppress")
+            self.suppress_btn.setStyleSheet(_BTN_SUPPRESS)
+
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.clock.config, self)
         if dialog.exec():
@@ -298,6 +359,30 @@ class AdhanClockUI(QWidget):
             )
         elif not hasattr(sys.modules.get("__main__", object()), "_test_clock"):
             self.countdown_label.setText("All prayers done for today.")
+
+        self._check_adhan_trigger(now, pt)
+
+    def _check_adhan_trigger(self, now, pt) -> None:
+        """Play adhan automatically when a prayer time is reached (once per prayer per day)."""
+        today = now.date()
+        if today != self._last_adhan_date:
+            self._adhan_played.clear()
+            self._last_adhan_date = today
+
+        for prayer in ("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha"):
+            key = f"{prayer}_{today}"
+            if key in self._adhan_played:
+                continue
+            p_time = getattr(pt, prayer.lower())
+            delta = (now - p_time).total_seconds()
+            if 0 <= delta <= _ADHAN_TRIGGER_WINDOW:
+                self._adhan_played.add(key)
+                volume = VOLUME_SUPPRESSED if self._suppressed else VOLUME_NORMAL
+                threading.Thread(
+                    target=lambda p=prayer, v=volume: self.clock.play_adhan(p, v),
+                    daemon=True,
+                ).start()
+                break
 
     def _ask_question(self) -> None:
         if not self._rag_ready:

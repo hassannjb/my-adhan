@@ -16,7 +16,14 @@ from adhan.calculator import build_params, calculate
 from adhan.config import DEFAULT_CONFIG_PATH, load_config, save_config
 from adhan.location import get_current_location
 from adhan.models import Config, Coordinates, PrayerSchedule
-from adhan.notifications import play_adhan, send_notification
+from adhan.notifications import (
+    play_adhan as _play_adhan,
+    stop_adhan as _stop_adhan,
+    set_adhan_volume as _set_adhan_volume,
+    send_notification,
+    VOLUME_NORMAL,
+    VOLUME_SUPPRESSED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +82,13 @@ class PrayerClock:
         params = build_params(self._config)
         return calculate(target_date, self._coords, params, self._tz)
 
-    def play_adhan(self, prayer_name: str = "") -> None:
+    def play_adhan(self, prayer_name: str = "", volume: float = VOLUME_NORMAL) -> None:
         send_notification("Adhaan Clock", "Time for Prayer")
         audio = _FAJR_AUDIO if prayer_name.lower() == "fajr" else _ADHAN_AUDIO
-        play_adhan(audio)
+        _play_adhan(audio, volume)
+
+    def stop_adhan(self) -> None:
+        _stop_adhan()
+
+    def set_volume(self, level: float) -> None:
+        _set_adhan_volume(level)
