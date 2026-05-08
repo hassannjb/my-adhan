@@ -29,7 +29,6 @@ _BTN_STYLE = (
 _BTN_PLAY     = _BTN_STYLE + "background-color: #27ae60;"
 _BTN_STOP     = _BTN_STYLE + "background-color: #c0392b;"
 _BTN_SUPPRESS = _BTN_STYLE + "background-color: #e67e22;"
-_BTN_RESTORE  = _BTN_STYLE + "background-color: #2980b9;"
 
 
 # ── RAG background worker ─────────────────────────────────────────────────────
@@ -72,6 +71,8 @@ class _RagWorker(QThread):
 
 class AdhanClockUI(QWidget):
 
+    _adhan_ended = pyqtSignal()   # emitted from watcher thread when playback stops
+
     def __init__(self, clock: PrayerClock | None = None) -> None:
         super().__init__()
         self.setWindowTitle("Adhan Clock")
@@ -84,9 +85,9 @@ class AdhanClockUI(QWidget):
         self.prayer_name_labels: list[QLabel] = []
         self.sunrise_label: QLabel | None = None
         self._rag_worker: _RagWorker | None = None
-        self._suppressed: bool = False
         self._adhan_played: set[str] = set()
         self._last_adhan_date = None
+        self._adhan_ended.connect(self._on_adhan_ended)
 
         self._build_ui()
         self._setup_timer()
@@ -216,7 +217,7 @@ class AdhanClockUI(QWidget):
 
         self.suppress_btn = QPushButton("🔉  Suppress")
         self.suppress_btn.setStyleSheet(_BTN_SUPPRESS)
-        self.suppress_btn.clicked.connect(self._toggle_suppress)
+        self.suppress_btn.clicked.connect(self._suppress_current)
         row.addWidget(self.suppress_btn)
 
         group.setLayout(row)
@@ -298,23 +299,33 @@ class AdhanClockUI(QWidget):
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _play_adhan(self) -> None:
-        volume = VOLUME_SUPPRESSED if self._suppressed else VOLUME_NORMAL
-        threading.Thread(target=lambda: self.clock.play_adhan(volume=volume),
+        threading.Thread(target=lambda: self.clock.play_adhan(volume=VOLUME_NORMAL),
                          daemon=True).start()
 
     def _stop_adhan(self) -> None:
         self.clock.stop_adhan()
 
-    def _toggle_suppress(self) -> None:
-        self._suppressed = not self._suppressed
-        if self._suppressed:
-            self.clock.set_volume(VOLUME_SUPPRESSED)
-            self.suppress_btn.setText("🔊  Restore")
-            self.suppress_btn.setStyleSheet(_BTN_RESTORE)
-        else:
-            self.clock.set_volume(VOLUME_NORMAL)
-            self.suppress_btn.setText("🔉  Suppress")
-            self.suppress_btn.setStyleSheet(_BTN_SUPPRESS)
+    def _suppress_current(self) -> None:
+        """Drop volume 95% for the current adhan; auto-restore when it ends."""
+        self.clock.set_volume(VOLUME_SUPPRESSED)
+        self.suppress_btn.setEnabled(False)
+        threading.Thread(target=self._watch_adhan_end, daemon=True).start()
+
+    def _watch_adhan_end(self) -> None:
+        """Background thread: wait for playback to stop, then signal the main thread."""
+        import time
+        try:
+            import pygame
+            while pygame.mixer.get_init() and pygame.mixer.music.get_busy():
+                time.sleep(0.5)
+        except Exception:
+            pass
+        self._adhan_ended.emit()
+
+    def _on_adhan_ended(self) -> None:
+        """Called on the main thread when the watcher detects playback has stopped."""
+        self.clock.set_volume(VOLUME_NORMAL)
+        self.suppress_btn.setEnabled(True)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.clock.config, self)
@@ -377,9 +388,8 @@ class AdhanClockUI(QWidget):
             delta = (now - p_time).total_seconds()
             if 0 <= delta <= _ADHAN_TRIGGER_WINDOW:
                 self._adhan_played.add(key)
-                volume = VOLUME_SUPPRESSED if self._suppressed else VOLUME_NORMAL
                 threading.Thread(
-                    target=lambda p=prayer, v=volume: self.clock.play_adhan(p, v),
+                    target=lambda p=prayer: self.clock.play_adhan(p, VOLUME_NORMAL),
                     daemon=True,
                 ).start()
                 break

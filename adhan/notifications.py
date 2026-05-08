@@ -10,7 +10,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 VOLUME_NORMAL     = 1.0
-VOLUME_SUPPRESSED = 0.2   # 80% reduction
+VOLUME_SUPPRESSED = 0.05  # 95% reduction
 
 
 def send_notification(title: str, subtitle: str) -> None:
