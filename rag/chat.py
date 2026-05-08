@@ -89,15 +89,21 @@ def answer_with_tools(
     context = build_context(chunks)
 
     system = (
-        f"{SYSTEM_PROMPT}\n\n"
-        "You also have access to a get_prayer_times tool for calculating actual prayer "
-        "times for any city. Use it whenever the user asks for specific prayer times."
+        "You are a helpful assistant for the Adhan Clock app — an Islamic prayer times application.\n"
+        "You have two sources of information:\n"
+        "1. A knowledge base (provided as context) covering prayer concepts, calculation methods, and app usage.\n"
+        "2. A get_prayer_times tool that calculates actual prayer times for any city on any date.\n\n"
+        "Rules:\n"
+        "- For questions about concepts, methods, or how-to: answer from the context.\n"
+        "- For questions asking for actual prayer times for a city or date: ALWAYS call get_prayer_times. "
+        "Never say you cannot answer these — you have the tool to calculate them.\n"
+        "- Be concise and accurate."
     )
 
     messages = [
         {
             "role": "user",
-            "content": f"Context from knowledge base:\n{context}\n\nQuestion: {question}",
+            "content": f"Knowledge base context:\n{context}\n\nQuestion: {question}",
         }
     ]
 
