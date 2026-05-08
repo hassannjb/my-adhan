@@ -1,10 +1,5 @@
 """Tests for the RAG ingestion pipeline (no API keys needed)."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / "rag"))
-
-from ingest import chunk_text, CHUNK_SIZE, OVERLAP
+from rag.ingest import chunk_text, CHUNK_SIZE, OVERLAP
 
 
 def test_short_text_is_single_chunk():

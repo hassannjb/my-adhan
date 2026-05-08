@@ -34,8 +34,9 @@ from pathlib import Path
 
 import anthropic
 
-sys.path.insert(0, str(Path(__file__).parent))
-from query import INDEX_PATH, answer, load_clients, load_index
+_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_root))
+from rag.query import INDEX_PATH, answer, load_clients, load_index
 
 CLAUDE_JUDGE_MODEL = "claude-haiku-4-5"
 

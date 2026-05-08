@@ -1,11 +1,7 @@
 """Tests for the LLM-as-judge eval pipeline (no API keys needed)."""
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "rag"))
-
-from eval import judge_answer, EVAL_DATASET, JUDGE_TOOL
+from rag.eval import judge_answer, EVAL_DATASET, JUDGE_TOOL
 
 
 def _make_judge_response(accuracy, grounding, completeness, reasoning="ok"):
