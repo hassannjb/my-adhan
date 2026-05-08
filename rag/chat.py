@@ -69,6 +69,98 @@ def _run_prayer_tool(city: str | None, date_str: str) -> str:
     return svc.format_answer(city=city, date_str=date_str)
 
 
+_CLASSIFIER_SYSTEM = (
+    "Classify the user's question. Reply with exactly one word.\n"
+    "Reply TOOL if they are asking for actual prayer times for a specific city, "
+    "place, or date (e.g. 'when is Fajr in Toronto', 'prayer times tomorrow').\n"
+    "Reply RAG for everything else (concepts, methods, app usage, how-to)."
+)
+
+_TOOL_SYSTEM = (
+    "You are a prayer times assistant. "
+    "The user wants to know prayer times for a specific location or date. "
+    "Call get_prayer_times with the city and date extracted from their question. "
+    "If no city is mentioned, omit it (the tool will use the local location). "
+    "After receiving the tool result, present the times clearly."
+)
+
+_RAG_SYSTEM = (
+    "You are a helpful assistant for the Adhan Clock app — an Islamic prayer times application. "
+    "Answer using ONLY the context provided. "
+    "If the context does not contain enough information, say so clearly. "
+    "Be concise and accurate."
+)
+
+
+def _classify(question: str, claude) -> str:
+    """Returns 'TOOL' or 'RAG'. Costs ~10 output tokens."""
+    from query import CLAUDE_MODEL
+    resp = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=5,
+        system=_CLASSIFIER_SYSTEM,
+        messages=[{"role": "user", "content": question}],
+    )
+    return "TOOL" if "TOOL" in resp.content[0].text.upper() else "RAG"
+
+
+def _answer_via_tool(question: str, claude) -> str:
+    """Force-call the prayer tool and return a formatted answer."""
+    from query import CLAUDE_MODEL
+
+    # Step 1: force Claude to fill in the tool arguments from the question
+    resp = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=256,
+        system=_TOOL_SYSTEM,
+        tools=[PRAYER_TOOL],
+        tool_choice={"type": "tool", "name": "get_prayer_times"},
+        messages=[{"role": "user", "content": question}],
+    )
+
+    tool_call = next(b for b in resp.content if b.type == "tool_use")
+    city = tool_call.input.get("city")
+    date_str = tool_call.input.get("date", "today")
+    tool_result = _run_prayer_tool(city, date_str)
+
+    # Step 2: ask Claude to present the result naturally
+    final = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=512,
+        system=_TOOL_SYSTEM,
+        tools=[PRAYER_TOOL],
+        messages=[
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": resp.content},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_call.id,
+                        "content": tool_result,
+                    }
+                ],
+            },
+        ],
+    )
+    return final.content[0].text
+
+
+def _answer_via_rag(question: str, records, matrix, voyage, claude) -> str:
+    """Standard RAG: retrieve chunks → answer with context."""
+    from query import CLAUDE_MODEL, build_context, retrieve
+    chunks = retrieve(question, records, matrix, voyage)
+    context = build_context(chunks)
+    resp = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        system=_RAG_SYSTEM,
+        messages=[{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}],
+    )
+    return resp.content[0].text
+
+
 def answer_with_tools(
     question: str,
     records: list[dict],
@@ -77,73 +169,18 @@ def answer_with_tools(
     claude,
 ) -> tuple[str, str]:
     """
-    Single-turn answer that uses either RAG or the prayer-time tool.
+    Route question to the right backend then return (answer, source).
 
-    Returns (answer_text, source) where source is "rag" or "tool".
+    WHY CLASSIFY FIRST?
+      Mixing RAG context with a tool instruction confuses the model: it reads
+      the docs (which explain HOW times are calculated), concludes it has
+      enough conceptual information, and never calls the tool.  Routing
+      BEFORE loading context keeps each path clean and unambiguous.
     """
-    import anthropic
-    import numpy as np
-    from query import CLAUDE_MODEL, SYSTEM_PROMPT, build_context, retrieve
-
-    chunks = retrieve(question, records, matrix, voyage)
-    context = build_context(chunks)
-
-    system = (
-        "You are a helpful assistant for the Adhan Clock app — an Islamic prayer times application.\n"
-        "You have two sources of information:\n"
-        "1. A knowledge base (provided as context) covering prayer concepts, calculation methods, and app usage.\n"
-        "2. A get_prayer_times tool that calculates actual prayer times for any city on any date.\n\n"
-        "Rules:\n"
-        "- For questions about concepts, methods, or how-to: answer from the context.\n"
-        "- For questions asking for actual prayer times for a city or date: ALWAYS call get_prayer_times. "
-        "Never say you cannot answer these — you have the tool to calculate them.\n"
-        "- Be concise and accurate."
-    )
-
-    messages = [
-        {
-            "role": "user",
-            "content": f"Knowledge base context:\n{context}\n\nQuestion: {question}",
-        }
-    ]
-
-    response = claude.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=1024,
-        system=system,
-        tools=[PRAYER_TOOL],
-        messages=messages,
-    )
-
-    # If Claude decided to call the prayer tool, execute it and continue
-    if response.stop_reason == "tool_use":
-        tool_call = next(b for b in response.content if b.type == "tool_use")
-        city = tool_call.input.get("city")
-        date_str = tool_call.input.get("date", "today")
-        tool_result = _run_prayer_tool(city, date_str)
-
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_call.id,
-                    "content": tool_result,
-                }
-            ],
-        })
-
-        final = claude.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            system=system,
-            tools=[PRAYER_TOOL],
-            messages=messages,
-        )
-        return final.content[0].text, "tool"
-
-    return response.content[0].text, "rag"
+    route = _classify(question, claude)
+    if route == "TOOL":
+        return _answer_via_tool(question, claude), "tool"
+    return _answer_via_rag(question, records, matrix, voyage, claude), "rag"
 
 
 # ── Built-in keyword evals ────────────────────────────────────────────────────

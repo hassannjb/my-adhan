@@ -11,6 +11,7 @@ from typing import Optional
 
 import pytz
 import requests
+from timezonefinder import TimezoneFinder
 
 from adhan.models import Coordinates
 
@@ -18,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 _IP_API_URL = "http://ip-api.com/json/"
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-_REVERSE_GEO_URL = "https://api.bigdatacloud.net/data/reverse-geocode-client"
 _REQUEST_TIMEOUT = 5
+
+_tf = TimezoneFinder()
 
 
 def get_current_location() -> tuple[Coordinates, pytz.BaseTzInfo, str]:
@@ -66,17 +68,8 @@ def geocode_city(city: str) -> Optional[tuple[Coordinates, pytz.BaseTzInfo, str]
         lon = float(results[0]["lon"])
         coords = Coordinates(latitude=lat, longitude=lon)
 
-        tz_data = requests.get(
-            _REVERSE_GEO_URL,
-            params={"latitude": lat, "longitude": lon, "localityLanguage": "en"},
-            timeout=_REQUEST_TIMEOUT,
-        ).json()
-
-        tz_name = tz_data.get("timezone", {}).get("name") or "UTC"
-        resolved_city = (
-            tz_data.get("city")
-            or results[0].get("display_name", city).split(",")[0].strip()
-        )
+        tz_name = _tf.timezone_at(lat=lat, lng=lon) or "UTC"
+        resolved_city = results[0].get("display_name", city).split(",")[0].strip()
         return coords, pytz.timezone(tz_name), resolved_city
 
     except Exception as e:
