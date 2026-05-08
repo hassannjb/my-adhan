@@ -18,6 +18,7 @@ class _W:
     def setGeometry(self, *a): pass
     def setStyleSheet(self, s=""): self._style = s
     def setLayout(self, *a): pass
+    def setSizePolicy(self, *a): pass
     def width(self): return 450
     def resizeEvent(self, e): pass
 
@@ -89,6 +90,7 @@ class _TextEdit(_W):
 class _SizePolicy:
     Preferred = 0
     Minimum = 0
+    Expanding = 1
 
 
 class _Qt:

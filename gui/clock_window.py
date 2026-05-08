@@ -69,6 +69,7 @@ class AdhanClockUI(QWidget):
             "background-color: #2b2b2b; color: #ffffff; font-family: sans-serif;"
         )
         self.prayer_labels: dict[str, QLabel] = {}
+        self.prayer_name_labels: list[QLabel] = []
         self.sunrise_label: QLabel | None = None
         self._rag_worker: _RagWorker | None = None
 
@@ -109,7 +110,7 @@ class AdhanClockUI(QWidget):
         layout.addWidget(self.countdown_label)
 
         layout.addStretch(1)
-        layout.addWidget(self._build_prayer_grid())
+        layout.addWidget(self._build_prayer_grid(), 1)
         layout.addStretch(1)
 
         self.settings_button = QPushButton("Edit Settings")
@@ -137,33 +138,46 @@ class AdhanClockUI(QWidget):
             "color: white; border: 1px solid #555555; border-radius: 5px; "
             "padding: 10px; font-size: 14px;"
         )
-        group.setMinimumHeight(250)
-        group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        group.setMinimumHeight(200)
+        group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        grid = QGridLayout()
-        grid.setAlignment(Qt.AlignCenter)
-        grid.setSpacing(10)
+        # Row 1: Fajr | Sunrise | Dhuhr
+        # Row 2: Asr  | Maghrib | Isha
+        row1 = QHBoxLayout()
+        row2 = QHBoxLayout()
+        all_prayers = ["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]
 
-        for i, prayer in enumerate(["Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"]):
+        for i, prayer in enumerate(all_prayers):
+            container = QWidget()
+            container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            h = QHBoxLayout()
+            h.setAlignment(Qt.AlignCenter)
+            h.setContentsMargins(0, 0, 0, 0)
+
             name_lbl = QLabel(prayer)
-            name_lbl.setStyleSheet(
-                "font-weight: bold; color: #aaaaaa; font-size: 16px;"
-            )
+            name_lbl.setStyleSheet("font-weight: bold; color: #aaaaaa; font-size: 16px;")
             name_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
             time_lbl = QLabel("--:--")
             time_lbl.setStyleSheet("color: #ffffff; font-size: 16px;")
             time_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
-            grid.addWidget(name_lbl, i, 0)
-            grid.addWidget(time_lbl, i, 1)
+            h.addWidget(name_lbl)
+            h.addWidget(time_lbl)
+            container.setLayout(h)
 
+            self.prayer_name_labels.append(name_lbl)
             if prayer == "Sunrise":
                 self.sunrise_label = time_lbl
             else:
                 self.prayer_labels[prayer] = time_lbl
 
-        group.setLayout(grid)
+            (row1 if i < 3 else row2).addWidget(container)
+
+        outer = QVBoxLayout()
+        outer.addLayout(row1)
+        outer.addLayout(row2)
+        group.setLayout(outer)
         return group
 
     def _build_rag_section(self) -> QGroupBox:
@@ -269,9 +283,14 @@ class AdhanClockUI(QWidget):
         next_prayer = None
         for prayer, lbl in self.prayer_labels.items():
             p_time = getattr(pt, prayer.lower())
-            lbl.setText(p_time.strftime("%H:%M"))
+            new_text = p_time.strftime("%H:%M")
+            if lbl.text() != new_text:
+                lbl.setText(new_text)
+                lbl.repaint()
             if p_time > now and next_prayer is None:
                 next_prayer = (prayer, p_time)
+
+        QApplication.processEvents()
 
         if next_prayer:
             self.countdown_label.setText(
@@ -333,8 +352,9 @@ class AdhanClockUI(QWidget):
             f"font-size: {max(18, w // 20)}px; color: #3498db; "
             "font-weight: bold; padding: 5px;"
         )
+        prayer_size = max(16, w // 34)
+        for lbl in self.prayer_name_labels:
+            lbl.setStyleSheet(f"font-weight: bold; font-size: {prayer_size}px; color: #aaaaaa;")
         for lbl in list(self.prayer_labels.values()) + [self.sunrise_label]:
-            lbl.setStyleSheet(
-                f"font-size: {max(10, w // 55)}px; color: #ffffff;"
-            )
+            lbl.setStyleSheet(f"font-size: {prayer_size}px; color: #ffffff;")
         super().resizeEvent(event)
