@@ -161,6 +161,28 @@ def _answer_via_rag(question: str, records, matrix, voyage, claude) -> str:
     return resp.content[0].text
 
 
+def answer_stream_with_tools(
+    question: str,
+    records: list[dict],
+    matrix,
+    voyage,
+    claude,
+):
+    """
+    Drop-in replacement for answer_stream that handles tool questions too.
+
+    Returns (token_generator, chunks) — same signature as answer_stream so the
+    GUI _RagWorker doesn't need to change.  Tool answers are emitted as a single
+    token; RAG answers stream normally.
+    """
+    from query import answer_stream
+    route = _classify(question, claude)
+    if route == "TOOL":
+        text = _answer_via_tool(question, claude)
+        return iter([text]), []
+    return answer_stream(question, records, matrix, voyage, claude)
+
+
 def answer_with_tools(
     question: str,
     records: list[dict],

@@ -221,7 +221,8 @@ class AdhanClockUI(QWidget):
         self._rag_ready = False
         try:
             sys.path.insert(0, str(Path(__file__).parent.parent))
-            from rag.query import answer_stream, load_index, load_clients, INDEX_PATH
+            from rag.query import load_index, load_clients, INDEX_PATH
+            from rag.chat import answer_stream_with_tools
             if not INDEX_PATH.exists():
                 self.rag_answer.setPlaceholderText(
                     "RAG index not found. Run: python rag/ingest.py"
@@ -229,7 +230,7 @@ class AdhanClockUI(QWidget):
                 return
             self._rag_records, self._rag_matrix = load_index(INDEX_PATH)
             self._rag_voyage, self._rag_claude = load_clients()
-            self._answer_stream_fn = answer_stream
+            self._answer_stream_fn = answer_stream_with_tools
             self._rag_ready = True
             self.rag_answer.setPlaceholderText(
                 f"Ready — {len(self._rag_records)} chunks indexed. "
