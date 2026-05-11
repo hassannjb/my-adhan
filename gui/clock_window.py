@@ -12,7 +12,8 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QGridLayout, QGroupBox, QPushButton,
-                             QSizePolicy, QLineEdit, QTextEdit, QScrollArea, QMenu)
+                             QSizePolicy, QLineEdit, QTextEdit, QScrollArea,
+                             QMenu, QComboBox)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
 
 from adhan import PrayerClock
@@ -49,7 +50,10 @@ class _RagWorker(QThread):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, question, answer_fn, records, matrix, voyage, claude) -> None:
+    def __init__(
+        self, question, answer_fn, records, matrix, voyage, claude,
+        language: str = "English",
+    ) -> None:
         super().__init__()
         self._question = question
         self._fn = answer_fn
@@ -57,12 +61,14 @@ class _RagWorker(QThread):
         self._matrix = matrix
         self._voyage = voyage
         self._claude = claude
+        self._language = language
 
     def run(self) -> None:
         try:
             stream, _ = self._fn(
                 self._question, self._records, self._matrix,
                 self._voyage, self._claude,
+                language=self._language,
             )
             for tok in stream:
                 self.token.emit(tok)
@@ -92,6 +98,9 @@ class AdhanClockUI(QWidget):
         self._adhan_played: set[str] = set()
         self._last_adhan_date = None
         self._adhan_ended.connect(self._on_adhan_ended)
+        self._record_worker     = None   # RecordWorker when mic is active
+        self._transcribe_worker = None   # TranscribeWorker keeping thread alive
+        self._tts_worker        = None   # TtsWorker when speaking
 
         self._build_ui()
         self._setup_timer()
@@ -253,17 +262,52 @@ class AdhanClockUI(QWidget):
         inner = QVBoxLayout()
         inner.setSpacing(8)
 
+        # ── Language selector ──────────────────────────────────────────────
+        from gui.voice import SUPPORTED_LANGUAGES
+        lang_row = QHBoxLayout()
+        lang_lbl = QLabel("Language:")
+        lang_lbl.setStyleSheet("color: #aaaaaa; font-size: 13px;")
+        lang_row.addWidget(lang_lbl)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItems(SUPPORTED_LANGUAGES)
+        self.lang_combo.setStyleSheet(
+            "background-color: #3a3a3a; color: white; border: 1px solid #555; "
+            "border-radius: 4px; padding: 4px 8px; font-size: 13px;"
+        )
+        self.lang_combo.currentTextChanged.connect(self._on_language_changed)
+        lang_row.addWidget(self.lang_combo)
+        lang_row.addStretch()
+
+        self.whisper_combo = QComboBox()
+        self.whisper_combo.addItems(["large-v3", "tiny"])
+        self.whisper_combo.setStyleSheet(
+            "background-color: #3a3a3a; color: #aaaaaa; border: 1px solid #555; "
+            "border-radius: 4px; padding: 4px 8px; font-size: 12px;"
+        )
+        self.whisper_combo.setToolTip("Whisper model: large-v3 = accurate, tiny = fast")
+        lang_row.addWidget(self.whisper_combo)
+        inner.addLayout(lang_row)
+
+        # ── Text input + mic + ask ─────────────────────────────────────────
         input_row = QHBoxLayout()
         self.rag_input = QLineEdit()
-        self.rag_input.setPlaceholderText(
-            "e.g. When is Fajr in Toronto tomorrow?"
-        )
+        self.rag_input.setPlaceholderText("e.g. When is Fajr in Toronto tomorrow?")
         self.rag_input.setStyleSheet(
             "background-color: #3a3a3a; color: white; border: 1px solid #555; "
             "border-radius: 4px; padding: 6px; font-size: 14px;"
         )
         self.rag_input.returnPressed.connect(self._ask_question)
         input_row.addWidget(self.rag_input)
+
+        self.mic_btn = QPushButton("🎤")
+        self.mic_btn.setStyleSheet(
+            "background-color: #2c3e50; color: white; padding: 6px 10px; "
+            "border-radius: 4px; font-size: 14px;"
+        )
+        self.mic_btn.setToolTip("Hold to record, click again to stop")
+        self.mic_btn.clicked.connect(self._toggle_recording)
+        input_row.addWidget(self.mic_btn)
 
         self.rag_ask_btn = QPushButton("Ask")
         self.rag_ask_btn.setStyleSheet(
@@ -274,6 +318,23 @@ class AdhanClockUI(QWidget):
         input_row.addWidget(self.rag_ask_btn)
         inner.addLayout(input_row)
 
+        # ── Answer display + speak button ─────────────────────────────────
+        answer_hdr = QHBoxLayout()
+        answer_lbl = QLabel("Answer")
+        answer_lbl.setStyleSheet("color: #888888; font-size: 12px;")
+        answer_hdr.addWidget(answer_lbl)
+        answer_hdr.addStretch()
+
+        self.speak_btn = QPushButton("🔊 Speak")
+        self.speak_btn.setStyleSheet(
+            "background-color: #1a5276; color: white; padding: 3px 10px; "
+            "border-radius: 4px; font-size: 12px;"
+        )
+        self.speak_btn.setToolTip("Read the answer aloud")
+        self.speak_btn.clicked.connect(self._speak_answer)
+        answer_hdr.addWidget(self.speak_btn)
+        inner.addLayout(answer_hdr)
+
         self.rag_answer = QTextEdit()
         self.rag_answer.setReadOnly(True)
         self.rag_answer.setPlaceholderText("Answer will appear here...")
@@ -282,7 +343,7 @@ class AdhanClockUI(QWidget):
             "border-radius: 4px; padding: 6px; font-size: 13px;"
         )
         self.rag_answer.setMinimumHeight(100)
-        self.rag_answer.setMaximumHeight(160)
+        self.rag_answer.setMaximumHeight(180)
         inner.addWidget(self.rag_answer)
 
         group.setLayout(inner)
@@ -450,6 +511,7 @@ class AdhanClockUI(QWidget):
             question, self._answer_stream_fn,
             self._rag_records, self._rag_matrix,
             self._rag_voyage, self._rag_claude,
+            language=self.lang_combo.currentText(),
         )
         self._rag_worker.token.connect(self._on_rag_token)
         self._rag_worker.finished.connect(self._on_rag_done)
@@ -469,6 +531,79 @@ class AdhanClockUI(QWidget):
         self.rag_answer.setPlainText(f"Error: {msg}")
         self.rag_ask_btn.setEnabled(True)
         self.rag_input.setEnabled(True)
+
+    # ── Language / voice slots ────────────────────────────────────────────────
+
+    def _on_language_changed(self, language: str) -> None:
+        hints = {
+            "English": "e.g. When is Fajr in Toronto tomorrow?",
+            "Urdu":    "مثلاً: کل فجر کا وقت کیا ہے؟",
+            "Hindi":   "उदा.: कल फजर का समय क्या है?",
+            "Turkish": "Örn.: Yarın İstanbul'da Fajr vakti ne zaman?",
+            "Arabic":  "مثال: ما وقت صلاة الفجر في القاهرة غدًا؟",
+        }
+        self.rag_input.setPlaceholderText(hints.get(language, hints["English"]))
+
+    def _toggle_recording(self) -> None:
+        from gui.voice import RecordWorker, TranscribeWorker
+        if self._record_worker and self._record_worker.isRunning():
+            # Stop recording → transcribe
+            self._record_worker.stop()
+            self.mic_btn.setStyleSheet(
+                "background-color: #2c3e50; color: white; padding: 6px 10px; "
+                "border-radius: 4px; font-size: 14px;"
+            )
+            self.mic_btn.setText("🎤")
+        else:
+            # Start recording
+            self._record_worker = RecordWorker()
+            self._record_worker.finished.connect(self._on_recording_done)
+            self._record_worker.error.connect(
+                lambda e: self.rag_answer.setPlainText(f"Mic error: {e}")
+            )
+            self._record_worker.start()
+            self.mic_btn.setStyleSheet(
+                "background-color: #c0392b; color: white; padding: 6px 10px; "
+                "border-radius: 4px; font-size: 14px;"
+            )
+            self.mic_btn.setText("⏹ Stop")
+
+    def _on_recording_done(self, audio, sample_rate: int) -> None:
+        from gui.voice import TranscribeWorker
+        language = self.lang_combo.currentText()
+        model = self.whisper_combo.currentText()
+        self.rag_answer.setPlainText("Transcribing…")
+        self._transcribe_worker = TranscribeWorker(
+            audio, sample_rate, language=language, model_size=model
+        )
+        self._transcribe_worker.result.connect(self._on_transcript)
+        self._transcribe_worker.error.connect(
+            lambda e: self.rag_answer.setPlainText(f"Transcription error: {e}")
+        )
+        self._transcribe_worker.start()
+
+    def _on_transcript(self, text: str) -> None:
+        self.rag_input.setText(text)
+        self.rag_answer.setPlainText("")
+        if text:
+            self._ask_question()
+
+    def _speak_answer(self) -> None:
+        from gui.voice import TtsWorker
+        text = self.rag_answer.toPlainText().strip()
+        if not text:
+            return
+        language = self.lang_combo.currentText()
+        self.speak_btn.setEnabled(False)
+        self._tts_worker = TtsWorker(text, language=language)
+        self._tts_worker.finished.connect(lambda: self.speak_btn.setEnabled(True))
+        self._tts_worker.error.connect(
+            lambda e: (
+                self.rag_answer.insertPlainText(f"\n[TTS error: {e}]"),
+                self.speak_btn.setEnabled(True),
+            )
+        )
+        self._tts_worker.start()
 
     # ── Resize ────────────────────────────────────────────────────────────────
 
