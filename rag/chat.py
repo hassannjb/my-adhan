@@ -161,12 +161,22 @@ def _answer_via_rag(question: str, records, matrix, voyage, claude) -> str:
     return resp.content[0].text
 
 
+_LANGUAGE_INSTRUCTIONS: dict[str, str] = {
+    "English": "",
+    "Urdu":    "اردو میں جواب دیں۔",
+    "Hindi":   "हिन्दी में उत्तर दें।",
+    "Turkish": "Türkçe yanıt verin.",
+    "Arabic":  "أجب باللغة العربية.",
+}
+
+
 def answer_stream_with_tools(
     question: str,
     records: list[dict],
     matrix,
     voyage,
     claude,
+    language: str = "English",
 ):
     """
     Drop-in replacement for answer_stream that handles tool questions too.
@@ -174,13 +184,18 @@ def answer_stream_with_tools(
     Returns (token_generator, chunks) — same signature as answer_stream so the
     GUI _RagWorker doesn't need to change.  Tool answers are emitted as a single
     token; RAG answers stream normally.
+
+    The optional `language` parameter instructs Claude to reply in the chosen
+    language by prepending a native-script directive to the question.
     """
     from rag.query import answer_stream
-    route = _classify(question, claude)
+    lang_instr = _LANGUAGE_INSTRUCTIONS.get(language, "")
+    q = f"{lang_instr}\n\n{question}".strip() if lang_instr else question
+    route = _classify(q, claude)
     if route == "TOOL":
-        text = _answer_via_tool(question, claude)
+        text = _answer_via_tool(q, claude)
         return iter([text]), []
-    return answer_stream(question, records, matrix, voyage, claude)
+    return answer_stream(q, records, matrix, voyage, claude)
 
 
 def answer_with_tools(

@@ -23,6 +23,7 @@ class _W:
     def setWidgetResizable(self, *a): pass
     def setHorizontalScrollBarPolicy(self, *a): pass
     def setVerticalScrollBarPolicy(self, *a): pass
+    def setToolTip(self, *a): pass
     def width(self): return 450
     def resizeEvent(self, e): pass
 
@@ -131,6 +132,7 @@ _widgets_mod.QTextEdit = _TextEdit
 _widgets_mod.QSizePolicy = _SizePolicy
 _widgets_mod.QScrollArea = _W
 _widgets_mod.QMenu = MagicMock()
+_widgets_mod.QComboBox = MagicMock()
 _widgets_mod.QApplication = MagicMock()
 
 _core_mod = MagicMock()
@@ -142,11 +144,15 @@ _core_mod.pyqtSignal = _pyqtSignal
 # Stub modules that have heavy deps or require GUI / network at import time.
 # adhan.models was imported above (real), so adhan + adhan.config stubs prevent
 # the rest of the package (adhan.clock → notifications → pygame) from loading.
+_voice_stub = MagicMock()
+_voice_stub.SUPPORTED_LANGUAGES = ["English", "Urdu", "Hindi", "Turkish", "Arabic"]
+
 for _name, _stub in [
     ("PyQt5", MagicMock()),
     ("adhan", MagicMock()),
     ("adhan.config", MagicMock()),
     ("gui.settings", MagicMock()),
+    ("gui.voice", _voice_stub),
     ("hijridate", MagicMock()),
 ]:
     sys.modules.setdefault(_name, _stub)
