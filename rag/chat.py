@@ -1,64 +1,62 @@
 """
-RAG Chat CLI — with live prayer-time tool use
-=============================================
+RAG Chat — with live prayer-time tool use
+==========================================
 
 Answers two kinds of questions:
   1. Knowledge questions ("What is the ISNA method?")
-     → standard RAG: retrieve chunks → Claude generates answer
+     → standard RAG: retrieve chunks → Ollama generates answer
 
   2. Live calculation questions ("When is Fajr in Toronto tomorrow?")
-     → tool use: Claude calls get_prayer_times(city, date) → PrayerService
-       calculates using adhanpy → Claude formulates the answer
+     → tool use: Ollama calls get_prayer_times(city, date) → PrayerService
+       calculates using adhanpy → Ollama formulates the answer
 
-The two flows are combined in one loop.  Claude decides which to use.
-
-WHY TOOL USE HERE?
-  RAG retrieves facts that were written down.  Tool use executes functions.
-  Prayer times for a specific city on a future date can't be in any document
-  — they must be calculated at query time.  This is the classic pattern:
-  use RAG for "what" knowledge, use tools for "compute on demand".
+No API keys required — all inference runs locally via Ollama.
 
 Usage:
     python rag/ingest.py          # build index first
     python rag/chat.py            # interactive
-    python rag/chat.py --eval     # keyword evals
 """
 
 from __future__ import annotations
 
-import argparse
 import sys
 from pathlib import Path
 
 _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
 
-from rag.query import INDEX_PATH, answer, answer_stream, load_clients, load_index  # noqa: E402
+import ollama
+from rag.query import (  # noqa: E402
+    INDEX_PATH, OLLAMA_MODEL, answer, answer_stream, load_clients, load_index,
+)
 
-# ── Prayer-time tool definition ───────────────────────────────────────────────
+# ── Prayer-time tool definition (OpenAI / Ollama format) ─────────────────────
 
 PRAYER_TOOL = {
-    "name": "get_prayer_times",
-    "description": (
-        "Calculate prayer times for a city on a specific date. "
-        "Use this whenever the user asks about prayer times for a named city "
-        "or a relative date like 'today', 'tomorrow', or 'yesterday'. "
-        "Do NOT use this for general questions about how prayer times work."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "city": {
-                "type": "string",
-                "description": "City name, e.g. 'Toronto', 'London', 'Karachi'. "
-                               "Omit to use the local machine's location.",
+    "type": "function",
+    "function": {
+        "name": "get_prayer_times",
+        "description": (
+            "Calculate prayer times for a city on a specific date. "
+            "Use this whenever the user asks about prayer times for a named city "
+            "or a relative date like 'today', 'tomorrow', or 'yesterday'. "
+            "Do NOT use this for general questions about how prayer times work."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name, e.g. 'Toronto', 'London', 'Karachi'. "
+                                   "Omit to use the local machine's location.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "One of: 'today', 'tomorrow', 'yesterday', or YYYY-MM-DD.",
+                },
             },
-            "date": {
-                "type": "string",
-                "description": "One of: 'today', 'tomorrow', 'yesterday', or YYYY-MM-DD.",
-            },
+            "required": ["date"],
         },
-        "required": ["date"],
     },
 }
 
@@ -79,86 +77,60 @@ _CLASSIFIER_SYSTEM = (
 _TOOL_SYSTEM = (
     "You are a prayer times assistant. "
     "The user wants to know prayer times for a specific location or date. "
-    "Call get_prayer_times with the city and date extracted from their question. "
+    "Call get_prayer_times with the city and date from their question. "
     "If no city is mentioned, omit it (the tool will use the local location). "
     "After receiving the tool result, present the times clearly."
 )
 
-_RAG_SYSTEM = (
-    "You are a helpful assistant for the Adhan Clock app — an Islamic prayer times application. "
-    "Answer using ONLY the context provided. "
-    "If the context does not contain enough information, say so clearly. "
-    "Be concise and accurate."
-)
+
+def _classify(question: str, model: str, history: list[dict] | None = None) -> str:
+    """Returns 'TOOL' or 'RAG'. Includes recent history so follow-ups are routed correctly."""
+    messages = [{"role": "system", "content": _CLASSIFIER_SYSTEM}]
+    if history:
+        messages.extend(history[-4:])  # last 2 turns for context
+    messages.append({"role": "user", "content": question})
+    resp = ollama.chat(model=model, messages=messages)
+    return "TOOL" if "TOOL" in resp["message"]["content"].upper() else "RAG"
 
 
-def _classify(question: str, claude) -> str:
-    """Returns 'TOOL' or 'RAG'. Costs ~10 output tokens."""
-    from rag.query import CLAUDE_MODEL
-    resp = claude.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=5,
-        system=_CLASSIFIER_SYSTEM,
-        messages=[{"role": "user", "content": question}],
-    )
-    return "TOOL" if "TOOL" in resp.content[0].text.upper() else "RAG"
-
-
-def _answer_via_tool(question: str, claude) -> str:
-    """Force-call the prayer tool and return a formatted answer."""
-    from rag.query import CLAUDE_MODEL
-
-    # Step 1: force Claude to fill in the tool arguments from the question
-    resp = claude.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=256,
-        system=_TOOL_SYSTEM,
+def _answer_via_tool(question: str, model: str, history: list[dict] | None = None) -> str:
+    """Call the prayer tool and return a formatted answer."""
+    messages = [{"role": "system", "content": _TOOL_SYSTEM}]
+    if history:
+        messages.extend(history[-4:])  # include prior turns so city can be inferred
+    messages.append({"role": "user", "content": question})
+    resp = ollama.chat(
+        model=model,
+        messages=messages,
         tools=[PRAYER_TOOL],
-        tool_choice={"type": "tool", "name": "get_prayer_times"},
-        messages=[{"role": "user", "content": question}],
     )
 
-    tool_call = next(b for b in resp.content if b.type == "tool_use")
-    city = tool_call.input.get("city")
-    date_str = tool_call.input.get("date", "today")
+    tool_calls = resp["message"].get("tool_calls") or []
+    if not tool_calls:
+        # Model didn't call the tool — fall back to plain answer
+        return resp["message"]["content"]
+
+    tool_call = tool_calls[0]
+    args = tool_call["function"]["arguments"]
+    if isinstance(args, str):
+        import json
+        args = json.loads(args)
+
+    city = args.get("city")
+    date_str = args.get("date", "today")
     tool_result = _run_prayer_tool(city, date_str)
 
-    # Step 2: ask Claude to present the result naturally
-    final = claude.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=512,
-        system=_TOOL_SYSTEM,
-        tools=[PRAYER_TOOL],
+    # Ask the model to present the result naturally
+    final = ollama.chat(
+        model=model,
         messages=[
+            {"role": "system", "content": _TOOL_SYSTEM},
             {"role": "user", "content": question},
-            {"role": "assistant", "content": resp.content},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_call.id,
-                        "content": tool_result,
-                    }
-                ],
-            },
+            {"role": "assistant", "content": "", "tool_calls": [tool_call]},
+            {"role": "tool", "content": tool_result},
         ],
     )
-    return final.content[0].text
-
-
-def _answer_via_rag(question: str, records, matrix, voyage, claude) -> str:
-    """Standard RAG: retrieve chunks → answer with context."""
-    from rag.query import CLAUDE_MODEL, build_context, retrieve
-    chunks = retrieve(question, records, matrix, voyage)
-    context = build_context(chunks)
-    resp = claude.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=1024,
-        system=_RAG_SYSTEM,
-        messages=[{"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}],
-    )
-    return resp.content[0].text
+    return final["message"]["content"]
 
 
 _LANGUAGE_INSTRUCTIONS: dict[str, str] = {
@@ -174,93 +146,71 @@ def answer_stream_with_tools(
     question: str,
     records: list[dict],
     matrix,
-    voyage,
-    claude,
+    embedder,
+    model: str,
     language: str = "English",
+    history: list[dict] | None = None,
 ):
     """
-    Drop-in replacement for answer_stream that handles tool questions too.
-
-    Returns (token_generator, chunks) — same signature as answer_stream so the
-    GUI _RagWorker doesn't need to change.  Tool answers are emitted as a single
-    token; RAG answers stream normally.
-
-    The optional `language` parameter instructs Claude to reply in the chosen
-    language by prepending a native-script directive to the question.
+    Main entry point for the web API and GUI.
+    Routes TOOL questions to prayer service, RAG questions to Ollama + retrieval.
+    Returns (token_generator, chunks).
     """
-    from rag.query import answer_stream
+    if history is None:
+        history = []
+
     lang_instr = _LANGUAGE_INSTRUCTIONS.get(language, "")
     q = f"{lang_instr}\n\n{question}".strip() if lang_instr else question
-    route = _classify(q, claude)
+
+    route = _classify(q, model, history=history)
     if route == "TOOL":
-        text = _answer_via_tool(q, claude)
+        text = _answer_via_tool(q, model, history=history)
         return iter([text]), []
-    return answer_stream(q, records, matrix, voyage, claude)
+
+    return _answer_stream_with_history(q, records, matrix, embedder, model, history)
 
 
-def answer_with_tools(
+def _answer_stream_with_history(
     question: str,
     records: list[dict],
     matrix,
-    voyage,
-    claude,
-) -> tuple[str, str]:
-    """
-    Route question to the right backend then return (answer, source).
+    embedder,
+    model: str,
+    history: list[dict],
+):
+    """RAG pipeline that includes conversation history in the Ollama prompt."""
+    from rag.query import SYSTEM_PROMPT, build_context, retrieve
 
-    WHY CLASSIFY FIRST?
-      Mixing RAG context with a tool instruction confuses the model: it reads
-      the docs (which explain HOW times are calculated), concludes it has
-      enough conceptual information, and never calls the tool.  Routing
-      BEFORE loading context keeps each path clean and unambiguous.
-    """
-    route = _classify(question, claude)
-    if route == "TOOL":
-        return _answer_via_tool(question, claude), "tool"
-    return _answer_via_rag(question, records, matrix, voyage, claude), "rag"
+    chunks = retrieve(question, records, matrix, embedder)
+    context = build_context(chunks)
 
+    # System + prior turns + current question (with fresh context)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"})
 
-# ── Built-in keyword evals ────────────────────────────────────────────────────
+    def _tokens():
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+        for chunk in stream:
+            text = chunk["message"]["content"]
+            if text:
+                yield text
 
-EVALS = [
-    ("What time does Fajr prayer start?", ["dawn", "twilight", "sunrise", "angle"]),
-    ("What is the difference between ISNA and Umm al-Qura methods?",
-     ["15", "18.5", "90 minutes", "saudi"]),
-    ("How do I change the calculation method in the app?",
-     ["edit settings", "dropdown", "save settings"]),
-    ("How many rakats does Dhuhr have?", ["4"]),
-    ("What happens at high latitudes?", ["latitude", "twilight", "midnight", "summer"]),
-]
-
-
-def run_evals(records, matrix, voyage, claude):
-    print("=" * 60)
-    print("RUNNING KEYWORD EVALS")
-    print("=" * 60)
-    passed = 0
-    for question, keywords in EVALS:
-        resp, chunks = answer(question, records, matrix, voyage, claude)
-        resp_lower = resp.lower()
-        missing = [kw for kw in keywords if kw.lower() not in resp_lower]
-        ok = len(missing) == 0
-        status = "PASS" if ok else "FAIL"
-        print(f"\n[{status}] {question}")
-        if not ok:
-            print(f"  Missing keywords: {missing}")
-            print(f"  Answer: {resp[:200]}...")
-        else:
-            passed += 1
-    print(f"\n{passed}/{len(EVALS)} evals passed.")
-    return passed == len(EVALS)
+    return _tokens(), chunks
 
 
 # ── Interactive loop ──────────────────────────────────────────────────────────
 
-def interactive_loop(records, matrix, voyage, claude):
-    print("Adhan Clock Assistant")
-    print("Answers general prayer questions (RAG) and calculates prayer times")
-    print("for any city (tool use).  Try: 'When is Fajr in Toronto tomorrow?'")
-    print("Prefix with 'debug:' to see retrieved chunks.  'quit' to exit.\n")
+def main():
+    if not INDEX_PATH.exists():
+        sys.exit(f"Index not found at {INDEX_PATH}.\nRun `python rag/ingest.py` first.")
+
+    print("Loading index...")
+    records, matrix = load_index(INDEX_PATH)
+    print(f"Index loaded: {len(records)} chunks\n")
+
+    embedder, model = load_clients()
+    print(f"Model: {model}\nType 'quit' to exit.\n")
 
     while True:
         try:
@@ -271,47 +221,11 @@ def interactive_loop(records, matrix, voyage, claude):
         if not user_input or user_input.lower() in ("quit", "exit"):
             break
 
-        debug = user_input.lower().startswith("debug:")
-        question = user_input[6:].strip() if debug else user_input
-
-        if debug:
-            # Debug mode: bypass tool use, show retrieved chunks
-            stream, chunks = answer_stream(question, records, matrix, voyage, claude)
-            print("\nAssistant: ", end="", flush=True)
-            for token in stream:
-                print(token, end="", flush=True)
-            print("\n")
-            print("── Retrieved chunks ──")
-            for c in chunks:
-                print(f"  [{c['score']:.3f}] {c['source']} chunk {c['chunk_id']}: "
-                      f"{c['text'][:80].replace(chr(10), ' ')}...")
-            print()
-        else:
-            resp, source = answer_with_tools(question, records, matrix, voyage, claude)
-            tag = "[tool]" if source == "tool" else "[rag]"
-            print(f"\nAssistant {tag}: {resp}\n")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Adhan Clock assistant")
-    parser.add_argument("--eval", action="store_true", help="Run keyword evals and exit")
-    args = parser.parse_args()
-
-    if not INDEX_PATH.exists():
-        sys.exit(f"Index not found at {INDEX_PATH}.\nRun `python rag/ingest.py` first.")
-
-    print("Loading index...")
-    records, matrix = load_index(INDEX_PATH)
-    print(f"Index loaded: {len(records)} chunks, "
-          f"{len(set(r['source'] for r in records))} document(s).\n")
-
-    voyage, claude = load_clients()
-
-    if args.eval:
-        ok = run_evals(records, matrix, voyage, claude)
-        sys.exit(0 if ok else 1)
-    else:
-        interactive_loop(records, matrix, voyage, claude)
+        stream, _ = answer_stream_with_tools(user_input, records, matrix, embedder, model)
+        print("\nAssistant: ", end="", flush=True)
+        for token in stream:
+            print(token, end="", flush=True)
+        print("\n")
 
 
 if __name__ == "__main__":
