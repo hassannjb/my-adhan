@@ -36,8 +36,10 @@
     .main-row {            /* two-column row */
       flex: 1;
       min-height: 0;
-      flex-wrap: nowrap !important;
       overflow: hidden;
+    }
+    @media (min-width: 768px) {
+      .main-row { flex-wrap: nowrap !important; }
     }
     .left-col, .right-col {
       display: flex;
