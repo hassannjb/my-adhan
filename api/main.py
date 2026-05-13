@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
         if not INDEX_PATH.exists():
             raise FileNotFoundError(f"Index not found — run: python rag/ingest.py")
         _rag["records"], _rag["matrix"] = load_index(INDEX_PATH)
-        _rag["voyage"], _rag["claude"] = load_clients()
+        _rag["embedder"], _rag["model"] = load_clients()
         _rag["ready"] = True
         _rag["chunks"] = len(_rag["records"])
         logger.info("RAG index loaded: %d chunks", _rag["chunks"])
@@ -96,8 +96,8 @@ async def chat(
                 q,
                 _rag["records"],
                 _rag["matrix"],
-                _rag["voyage"],
-                _rag["claude"],
+                _rag["embedder"],
+                _rag["model"],
                 language=language,
             )
             for token in stream:
