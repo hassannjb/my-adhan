@@ -83,26 +83,25 @@ _TOOL_SYSTEM = (
 )
 
 
-def _classify(question: str, model: str) -> str:
-    """Returns 'TOOL' or 'RAG'."""
-    resp = ollama.chat(
-        model=model,
-        messages=[
-            {"role": "system", "content": _CLASSIFIER_SYSTEM},
-            {"role": "user", "content": question},
-        ],
-    )
+def _classify(question: str, model: str, history: list[dict] | None = None) -> str:
+    """Returns 'TOOL' or 'RAG'. Includes recent history so follow-ups are routed correctly."""
+    messages = [{"role": "system", "content": _CLASSIFIER_SYSTEM}]
+    if history:
+        messages.extend(history[-4:])  # last 2 turns for context
+    messages.append({"role": "user", "content": question})
+    resp = ollama.chat(model=model, messages=messages)
     return "TOOL" if "TOOL" in resp["message"]["content"].upper() else "RAG"
 
 
-def _answer_via_tool(question: str, model: str) -> str:
+def _answer_via_tool(question: str, model: str, history: list[dict] | None = None) -> str:
     """Call the prayer tool and return a formatted answer."""
+    messages = [{"role": "system", "content": _TOOL_SYSTEM}]
+    if history:
+        messages.extend(history[-4:])  # include prior turns so city can be inferred
+    messages.append({"role": "user", "content": question})
     resp = ollama.chat(
         model=model,
-        messages=[
-            {"role": "system", "content": _TOOL_SYSTEM},
-            {"role": "user", "content": question},
-        ],
+        messages=messages,
         tools=[PRAYER_TOOL],
     )
 
@@ -163,9 +162,9 @@ def answer_stream_with_tools(
     lang_instr = _LANGUAGE_INSTRUCTIONS.get(language, "")
     q = f"{lang_instr}\n\n{question}".strip() if lang_instr else question
 
-    route = _classify(q, model)
+    route = _classify(q, model, history=history)
     if route == "TOOL":
-        text = _answer_via_tool(q, model)
+        text = _answer_via_tool(q, model, history=history)
         return iter([text]), []
 
     return _answer_stream_with_history(q, records, matrix, embedder, model, history)
