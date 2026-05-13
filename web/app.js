@@ -62,10 +62,11 @@ function adhanApp() {
     chatLang:         'English',
     inputPlaceholder: PLACEHOLDERS.English,
     question:         '',
-    answer:           '',
+    messages:         [],   // [{role:'user'|'assistant', content:''}]
     chatLoading:      false,
     recognizing:      false,
     _recognition:     null,
+    sessionId:        crypto.randomUUID(),
 
     // ── init ─────────────────────────────────────────────────────────
     init() {
@@ -284,20 +285,25 @@ function adhanApp() {
     async askQuestion() {
       if (!this.question.trim() || this.chatLoading) return;
       if (!this.ragReady) {
-        this.answer = `Chat unavailable: ${this.ragError || 'RAG index not loaded. Run: python rag/ingest.py'}`;
+        this.messages.push({ role: 'assistant', content: `Chat unavailable: ${this.ragError || 'RAG index not loaded.'}` });
         return;
       }
       const q = this.question.trim();
       this.question = '';
-      this.answer = '';
       this.chatLoading = true;
 
+      this.messages.push({ role: 'user',      content: q });
+      this.messages.push({ role: 'assistant', content: '' });
+      const idx = this.messages.length - 1;
+
+      const box = document.querySelector('.answer-box');
+
       try {
-        const url = `/api/chat?q=${encodeURIComponent(q)}&language=${encodeURIComponent(this.chatLang)}`;
+        const url = `/api/chat?q=${encodeURIComponent(q)}&language=${encodeURIComponent(this.chatLang)}&session_id=${encodeURIComponent(this.sessionId)}`;
         const resp = await fetch(url);
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
-          this.answer = err.error || 'Server error.';
+          this.messages[idx].content = err.error || 'Server error.';
           return;
         }
 
@@ -310,21 +316,30 @@ function adhanApp() {
           if (done) break;
           buf += decoder.decode(value, { stream: true });
 
-          // Parse SSE lines; keep last incomplete line in buffer
           const lines = buf.split('\n');
           buf = lines.pop();
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue;
             const raw = line.slice(6).trim();
             if (raw === '[DONE]') break;
-            try { this.answer += JSON.parse(raw); } catch (_) {}
+            try {
+              this.messages[idx].content += JSON.parse(raw);
+              if (box) box.scrollTop = box.scrollHeight;
+            } catch (_) {}
           }
         }
       } catch (e) {
-        this.answer = `Error: ${e.message}`;
+        this.messages[idx].content = `Error: ${e.message}`;
       } finally {
         this.chatLoading = false;
+        if (box) box.scrollTop = box.scrollHeight;
       }
+    },
+
+    async newChat() {
+      await fetch(`/api/session/${this.sessionId}`, { method: 'DELETE' }).catch(() => {});
+      this.sessionId = crypto.randomUUID();
+      this.messages = [];
     },
 
     // ── voice input (Web Speech API) ─────────────────────────────────
@@ -361,9 +376,10 @@ function adhanApp() {
 
     // ── TTS (Web Speech API) ─────────────────────────────────────────
     speakAnswer() {
-      if (!this.answer || !window.speechSynthesis) return;
+      const last = [...this.messages].reverse().find(m => m.role === 'assistant');
+      if (!last?.content || !window.speechSynthesis) return;
       speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(this.answer);
+      const utt = new SpeechSynthesisUtterance(last.content);
       utt.lang = LANG_SPEECH[this.chatLang] || 'en-US';
       speechSynthesis.speak(utt);
     },

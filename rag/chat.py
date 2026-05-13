@@ -150,12 +150,16 @@ def answer_stream_with_tools(
     embedder,
     model: str,
     language: str = "English",
+    history: list[dict] | None = None,
 ):
     """
     Main entry point for the web API and GUI.
     Routes TOOL questions to prayer service, RAG questions to Ollama + retrieval.
     Returns (token_generator, chunks).
     """
+    if history is None:
+        history = []
+
     lang_instr = _LANGUAGE_INSTRUCTIONS.get(language, "")
     q = f"{lang_instr}\n\n{question}".strip() if lang_instr else question
 
@@ -163,7 +167,37 @@ def answer_stream_with_tools(
     if route == "TOOL":
         text = _answer_via_tool(q, model)
         return iter([text]), []
-    return answer_stream(q, records, matrix, embedder, model)
+
+    return _answer_stream_with_history(q, records, matrix, embedder, model, history)
+
+
+def _answer_stream_with_history(
+    question: str,
+    records: list[dict],
+    matrix,
+    embedder,
+    model: str,
+    history: list[dict],
+):
+    """RAG pipeline that includes conversation history in the Ollama prompt."""
+    from rag.query import SYSTEM_PROMPT, build_context, retrieve
+
+    chunks = retrieve(question, records, matrix, embedder)
+    context = build_context(chunks)
+
+    # System + prior turns + current question (with fresh context)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"})
+
+    def _tokens():
+        stream = ollama.chat(model=model, messages=messages, stream=True)
+        for chunk in stream:
+            text = chunk["message"]["content"]
+            if text:
+                yield text
+
+    return _tokens(), chunks
 
 
 # ── Interactive loop ──────────────────────────────────────────────────────────

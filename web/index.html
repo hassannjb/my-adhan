@@ -90,10 +90,13 @@
       flex: 1;
       min-height: 120px;
       overflow-y: auto;
-      white-space: pre-wrap;
       word-break: break-word;
     }
     .answer-placeholder { color: rgba(255,255,255,.35); font-style: italic; }
+    .msg-user      { color: var(--gold); margin-bottom: .35rem; white-space: pre-wrap; }
+    .msg-assistant { color: #fff; margin-bottom: .9rem; padding-bottom: .75rem; border-bottom: 1px solid rgba(255,255,255,.08); white-space: pre-wrap; }
+    .msg-assistant:last-child { border-bottom: none; margin-bottom: 0; }
+    .msg-label     { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; opacity: .55; display: block; margin-bottom: .2rem; }
 
     /* ── settings panel ── */
     .settings-panel {
@@ -262,19 +265,30 @@
             </button>
           </div>
 
-          <!-- Answer label + speak -->
+          <!-- Conversation label + controls -->
           <div class="d-flex justify-content-between align-items-center" style="flex-shrink:0">
-            <span style="font-size:.85rem">Answer</span>
-            <button class="btn btn-sm btn-outline-light py-0 px-2"
-                    style="font-size:.75rem"
-                    @click="speakAnswer()"
-                    :disabled="!answer">🔊 Speak</button>
+            <span style="font-size:.85rem">Conversation</span>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-outline-light py-0 px-2"
+                      style="font-size:.75rem"
+                      @click="speakAnswer()"
+                      :disabled="!messages.length">🔊 Speak</button>
+              <button class="btn btn-sm btn-outline-secondary py-0 px-2"
+                      style="font-size:.75rem"
+                      @click="newChat()"
+                      title="Clear conversation and start fresh">↺ New Chat</button>
+            </div>
           </div>
 
-          <!-- Answer box — fills remaining height -->
+          <!-- Conversation thread — fills remaining height -->
           <div class="answer-box">
-            <span x-show="!answer" class="answer-placeholder">Answer will appear here…</span>
-            <span x-show="answer" x-text="answer"></span>
+            <span x-show="messages.length === 0" class="answer-placeholder">Answer will appear here…</span>
+            <template x-for="(msg, i) in messages" :key="i">
+              <div :class="'msg-' + msg.role">
+                <span class="msg-label" x-text="msg.role === 'user' ? 'You' : 'Assistant'"></span>
+                <span x-text="msg.content"></span>
+              </div>
+            </template>
           </div>
 
         </div>
