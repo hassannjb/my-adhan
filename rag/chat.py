@@ -147,6 +147,30 @@ _QURAN_SYSTEM = (
 )
 
 _VERSE_RE = re.compile(r'\b(\d+):(\d+(?:-\d+)?)\b')
+# "chapter 2 verse 255" / "surah 2 ayah 255"
+_NATURAL_VERSE_RE = re.compile(
+    r'(?:chapter|surah|sura)\s+(\d+)\s+(?:verse|ayah|ayat)\s+(\d+(?:-\d+)?)',
+    re.IGNORECASE,
+)
+# "verse 255 of chapter 2" / "ayah 255 of surah 2"
+_VERSE_OF_CHAPTER_RE = re.compile(
+    r'(?:verse|ayah|ayat)\s+(\d+(?:-\d+)?)\s+of\s+(?:chapter|surah|sura)\s+(\d+)',
+    re.IGNORECASE,
+)
+
+
+def _extract_verse_ref(question: str) -> str | None:
+    """Return a surah:ayah string if the question names a specific verse."""
+    m = _VERSE_RE.search(question)
+    if m:
+        return m.group(0)
+    m = _NATURAL_VERSE_RE.search(question)
+    if m:
+        return f"{m.group(1)}:{m.group(2)}"
+    m = _VERSE_OF_CHAPTER_RE.search(question)
+    if m:
+        return f"{m.group(2)}:{m.group(1)}"
+    return None
 
 
 def _format_search_results(raw_json: str) -> str:
@@ -180,9 +204,8 @@ def _answer_via_quran(question: str, model: str) -> str:
     """Query Quran MCP and format the result with Ollama."""
     try:
         hdrs = _quran_session()
-        verse_match = _VERSE_RE.search(question)
-        if verse_match:
-            ayah_ref = verse_match.group(0)
+        ayah_ref = _extract_verse_ref(question)
+        if ayah_ref:
             translation = _call_quran_tool("fetch_translation", {"ayahs": ayah_ref}, hdrs)
             quran_data = f"Translation of {ayah_ref}:\n{translation}"
         else:
