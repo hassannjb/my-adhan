@@ -158,6 +158,159 @@ _VERSE_OF_CHAPTER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Surah number → verse count for all 114 surahs
+_SURAH_VERSE_COUNTS = [
+    0,   # padding so index == surah number
+    7, 286, 200, 176, 120, 165, 206, 75, 129, 109,   # 1-10
+    123, 111, 43, 52, 99, 128, 111, 110, 98, 135,    # 11-20
+    112, 78, 118, 64, 77, 227, 93, 88, 69, 60,       # 21-30
+    34, 30, 73, 54, 45, 83, 182, 88, 75, 85,         # 31-40
+    54, 53, 89, 59, 37, 35, 38, 29, 18, 45,          # 41-50
+    60, 49, 62, 55, 78, 96, 29, 22, 24, 13,          # 51-60
+    14, 11, 11, 18, 12, 12, 30, 52, 52, 44,          # 61-70
+    28, 28, 20, 56, 40, 31, 50, 40, 46, 42,          # 71-80
+    29, 19, 36, 25, 22, 17, 19, 26, 30, 20,          # 81-90
+    15, 21, 11, 8, 8, 19, 5, 8, 8, 11,              # 91-100
+    11, 8, 3, 9, 5, 4, 7, 3, 6, 3,                  # 101-110
+    5, 4, 5, 6,                                       # 111-114
+]
+
+# Normalized name → surah number  (key = lowercase, no spaces, no "al/an/ar/as/at/az/ad" prefix)
+_SURAH_BY_NAME: dict[str, int] = {}
+
+def _idx(*pairs: tuple[int, str]) -> None:
+    for num, name in pairs:
+        key = name.lower().replace(" ", "").replace("-", "").replace("'", "")
+        _SURAH_BY_NAME[key] = num
+        # also index without common Arabic article prefix
+        for art in ("al", "an", "ar", "as", "at", "az", "ad"):
+            if key.startswith(art):
+                _SURAH_BY_NAME[key[len(art):]] = num
+                break
+
+_idx(
+    (1, "Al-Fatihah"), (1, "Al-Fatiha"), (1, "Fatiha"), (1, "Opening"),
+    (2, "Al-Baqarah"), (2, "Baqara"), (2, "Cow"),
+    (3, "Ali-Imran"), (3, "Al-Imran"), (3, "Imran"),
+    (4, "An-Nisa"), (4, "Nisa"), (4, "Women"),
+    (5, "Al-Maidah"), (5, "Al-Ma'idah"), (5, "Maidah"), (5, "Table"),
+    (6, "Al-Anam"), (6, "Al-An'am"), (6, "Anam"), (6, "Cattle"),
+    (7, "Al-Araf"), (7, "Al-A'raf"), (7, "Araf"),
+    (8, "Al-Anfal"), (8, "Anfal"), (8, "Spoils"),
+    (9, "At-Tawbah"), (9, "Tawbah"), (9, "Repentance"), (9, "Bara'ah"),
+    (10, "Yunus"), (10, "Jonah"),
+    (11, "Hud"),
+    (12, "Yusuf"), (12, "Joseph"),
+    (13, "Ar-Ra'd"), (13, "Ra'd"), (13, "Thunder"),
+    (14, "Ibrahim"), (14, "Abraham"),
+    (15, "Al-Hijr"), (15, "Hijr"),
+    (16, "An-Nahl"), (16, "Nahl"), (16, "Bee"),
+    (17, "Al-Isra"), (17, "Al-Isra'"), (17, "Isra"), (17, "Bani-Israil"), (17, "Night Journey"),
+    (18, "Al-Kahf"), (18, "Kahf"), (18, "Cave"),
+    (19, "Maryam"), (19, "Mary"),
+    (20, "Ta-Ha"), (20, "Taha"),
+    (21, "Al-Anbiya"), (21, "Al-Anbiya'"), (21, "Anbiya"), (21, "Prophets"),
+    (22, "Al-Hajj"), (22, "Hajj"), (22, "Pilgrimage"),
+    (23, "Al-Mu'minun"), (23, "Al-Muminun"), (23, "Muminun"), (23, "Believers"),
+    (24, "An-Nur"), (24, "Nur"), (24, "Light"),
+    (25, "Al-Furqan"), (25, "Furqan"), (25, "Criterion"),
+    (26, "Ash-Shu'ara"), (26, "Shuara"), (26, "Poets"),
+    (27, "An-Naml"), (27, "Naml"), (27, "Ant"),
+    (28, "Al-Qasas"), (28, "Qasas"), (28, "Stories"),
+    (29, "Al-Ankabut"), (29, "Al-'Ankabut"), (29, "Ankabut"), (29, "Spider"),
+    (30, "Ar-Rum"), (30, "Rum"), (30, "Romans"),
+    (31, "Luqman"),
+    (32, "As-Sajdah"), (32, "Sajdah"), (32, "Prostration"),
+    (33, "Al-Ahzab"), (33, "Ahzab"), (33, "Confederates"),
+    (34, "Saba"), (34, "Sheba"),
+    (35, "Fatir"), (35, "Al-Mala'ikah"), (35, "Creator"), (35, "Originator"),
+    (36, "Ya-Sin"), (36, "Yasin"), (36, "Ya Sin"),
+    (37, "As-Saffat"), (37, "Saffat"), (37, "Those Ranged"),
+    (38, "Sad"), (38, "Saad"),
+    (39, "Az-Zumar"), (39, "Zumar"), (39, "Groups"),
+    (40, "Ghafir"), (40, "Al-Mu'min"), (40, "Mumin"), (40, "Forgiving"),
+    (41, "Fussilat"), (41, "Ha-Mim Sajdah"),
+    (42, "Ash-Shura"), (42, "Shura"), (42, "Consultation"),
+    (43, "Az-Zukhruf"), (43, "Zukhruf"), (43, "Ornaments"),
+    (44, "Ad-Dukhan"), (44, "Dukhan"), (44, "Smoke"),
+    (45, "Al-Jathiyah"), (45, "Jathiyah"), (45, "Crouching"),
+    (46, "Al-Ahqaf"), (46, "Ahqaf"),
+    (47, "Muhammad"), (47, "Al-Qital"),
+    (48, "Al-Fath"), (48, "Fath"), (48, "Victory"),
+    (49, "Al-Hujurat"), (49, "Hujurat"), (49, "Rooms"),
+    (50, "Qaf"),
+    (51, "Adh-Dhariyat"), (51, "Dhariyat"), (51, "Winds"),
+    (52, "At-Tur"), (52, "Tur"), (52, "Mount"),
+    (53, "An-Najm"), (53, "Najm"), (53, "Star"),
+    (54, "Al-Qamar"), (54, "Qamar"), (54, "Moon"),
+    (55, "Ar-Rahman"), (55, "Rahman"), (55, "Beneficent"),
+    (56, "Al-Waqi'ah"), (56, "Al-Waqiah"), (56, "Waqiah"), (56, "Event"),
+    (57, "Al-Hadid"), (57, "Hadid"), (57, "Iron"),
+    (58, "Al-Mujadilah"), (58, "Mujadilah"), (58, "Pleading"),
+    (59, "Al-Hashr"), (59, "Hashr"), (59, "Exile"),
+    (60, "Al-Mumtahanah"), (60, "Mumtahanah"), (60, "She That Is Tested"),
+    (61, "As-Saf"), (61, "Saff"), (61, "Ranks"),
+    (62, "Al-Jumu'ah"), (62, "Al-Juma"), (62, "Juma"), (62, "Friday"),
+    (63, "Al-Munafiqun"), (63, "Munafiqun"), (63, "Hypocrites"),
+    (64, "At-Taghabun"), (64, "Taghabun"), (64, "Mutual Disillusion"),
+    (65, "At-Talaq"), (65, "Talaq"), (65, "Divorce"),
+    (66, "At-Tahrim"), (66, "Tahrim"), (66, "Prohibition"),
+    (67, "Al-Mulk"), (67, "Mulk"), (67, "Sovereignty"),
+    (68, "Al-Qalam"), (68, "Qalam"), (68, "Pen"),
+    (69, "Al-Haqqah"), (69, "Haqqah"), (69, "Reality"),
+    (70, "Al-Ma'arij"), (70, "Maarij"), (70, "Ascending Stairways"),
+    (71, "Nuh"), (71, "Noah"),
+    (72, "Al-Jinn"), (72, "Jinn"),
+    (73, "Al-Muzzammil"), (73, "Muzzammil"), (73, "Enshrouded"),
+    (74, "Al-Muddaththir"), (74, "Muddaththir"), (74, "Wrapped"),
+    (75, "Al-Qiyamah"), (75, "Qiyamah"), (75, "Resurrection"),
+    (76, "Al-Insan"), (76, "Insan"), (76, "Al-Dahr"), (76, "Dahr"), (76, "Human"),
+    (77, "Al-Mursalat"), (77, "Mursalat"), (77, "Emissaries"),
+    (78, "An-Naba"), (78, "Naba"), (78, "Tidings"),
+    (79, "An-Nazi'at"), (79, "Naziat"), (79, "Those Who Drag Forth"),
+    (80, "Abasa"), (80, "He Frowned"),
+    (81, "At-Takwir"), (81, "Takwir"), (81, "Overthrowing"),
+    (82, "Al-Infitar"), (82, "Infitar"), (82, "Cleaving"),
+    (83, "Al-Mutaffifin"), (83, "Mutaffifin"), (83, "Defrauding"),
+    (84, "Al-Inshiqaq"), (84, "Inshiqaq"), (84, "Splitting Open"),
+    (85, "Al-Buruj"), (85, "Buruj"), (85, "Constellations"),
+    (86, "At-Tariq"), (86, "Tariq"), (86, "Night Star"),
+    (87, "Al-A'la"), (87, "Al-Ala"), (87, "Ala"), (87, "Most High"),
+    (88, "Al-Ghashiyah"), (88, "Ghashiyah"), (88, "Overwhelming"),
+    (89, "Al-Fajr"), (89, "Fajr"), (89, "Dawn"),
+    (90, "Al-Balad"), (90, "Balad"), (90, "City"),
+    (91, "Ash-Shams"), (91, "Shams"), (91, "Sun"),
+    (92, "Al-Layl"), (92, "Layl"), (92, "Night"),
+    (93, "Ad-Duha"), (93, "Duha"), (93, "Morning Hours"),
+    (94, "Ash-Sharh"), (94, "Al-Inshirah"), (94, "Inshirah"), (94, "Sharh"), (94, "Relief"),
+    (95, "At-Tin"), (95, "Tin"), (95, "Fig"),
+    (96, "Al-Alaq"), (96, "Alaq"), (96, "Clot"),
+    (97, "Al-Qadr"), (97, "Qadr"), (97, "Power"), (97, "Night of Power"),
+    (98, "Al-Bayyinah"), (98, "Bayyinah"), (98, "Clear Proof"),
+    (99, "Az-Zalzalah"), (99, "Zalzalah"), (99, "Earthquake"),
+    (100, "Al-Adiyat"), (100, "Al-'Adiyat"), (100, "Adiyat"), (100, "Chargers"),
+    (101, "Al-Qari'ah"), (101, "Al-Qariah"), (101, "Qariah"), (101, "Calamity"),
+    (102, "At-Takathur"), (102, "Takathur"), (102, "Rivalry"),
+    (103, "Al-Asr"), (103, "Al-'Asr"), (103, "Asr"), (103, "Time"), (103, "Declining Day"),
+    (104, "Al-Humazah"), (104, "Humazah"), (104, "Traducer"),
+    (105, "Al-Fil"), (105, "Fil"), (105, "Elephant"),
+    (106, "Quraysh"), (106, "Quraish"),
+    (107, "Al-Ma'un"), (107, "Al-Maun"), (107, "Maun"), (107, "Assistance"),
+    (108, "Al-Kawthar"), (108, "Kawthar"), (108, "Abundance"),
+    (109, "Al-Kafirun"), (109, "Al-Kafiroon"), (109, "Kafirun"), (109, "Disbelievers"),
+    (110, "An-Nasr"), (110, "Nasr"), (110, "Victory"),
+    (111, "Al-Masad"), (111, "Al-Lahab"), (111, "Lahab"), (111, "Masad"), (111, "Palm Fiber"),
+    (112, "Al-Ikhlas"), (112, "Ikhlas"), (112, "Sincerity"),
+    (113, "Al-Falaq"), (113, "Falaq"), (113, "Daybreak"),
+    (114, "An-Nas"), (114, "Nas"), (114, "Mankind"),
+)
+del _idx
+
+_SURAH_NAME_DETECT_RE = re.compile(
+    r'(?:surah|sura)\s+(\S+(?:\s+\S+){0,3})',
+    re.IGNORECASE,
+)
+
 
 def _extract_verse_ref(question: str) -> str | None:
     """Return a surah:ayah string if the question names a specific verse."""
@@ -170,6 +323,32 @@ def _extract_verse_ref(question: str) -> str | None:
     m = _VERSE_OF_CHAPTER_RE.search(question)
     if m:
         return f"{m.group(2)}:{m.group(1)}"
+    return None
+
+
+def _lookup_surah(name: str) -> int | None:
+    """Normalize a surah name string and return its surah number."""
+    raw = name.strip().lower().replace(" ", "").replace("-", "").replace("'", "")
+    num = _SURAH_BY_NAME.get(raw)
+    if num is None:
+        for art in ("al", "an", "ar", "as", "at", "az", "ad"):
+            if raw.startswith(art):
+                num = _SURAH_BY_NAME.get(raw[len(art):])
+                break
+    return num
+
+
+def _extract_surah_ref(question: str) -> str | None:
+    """Return a surah:1-N string when the question names a surah by name."""
+    m = _SURAH_NAME_DETECT_RE.search(question)
+    if not m:
+        return None
+    words = m.group(1).split()
+    # Try progressively shorter name fragments (handles trailing words like "please")
+    for end in range(len(words), 0, -1):
+        num = _lookup_surah(" ".join(words[:end]))
+        if num is not None:
+            return f"{num}:1-{_SURAH_VERSE_COUNTS[num]}"
     return None
 
 
@@ -204,7 +383,7 @@ def _answer_via_quran(question: str, model: str) -> str:
     """Query Quran MCP and format the result with Ollama."""
     try:
         hdrs = _quran_session()
-        ayah_ref = _extract_verse_ref(question)
+        ayah_ref = _extract_verse_ref(question) or _extract_surah_ref(question)
         if ayah_ref:
             translation = _call_quran_tool("fetch_translation", {"ayahs": ayah_ref}, hdrs)
             quran_data = f"Translation of {ayah_ref}:\n{translation}"
