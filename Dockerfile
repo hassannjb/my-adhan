@@ -21,6 +21,11 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 # Copy source
 COPY . .
 
+# Download audio files (excluded from git due to HF binary file restrictions)
+RUN mkdir -p lib && \
+    curl -fsSL "https://raw.githubusercontent.com/hassannjb/my-adhan/main/lib/makkah_adhan.mp3" -o lib/makkah_adhan.mp3 && \
+    curl -fsSL "https://raw.githubusercontent.com/hassannjb/my-adhan/main/lib/fajr.mp3" -o lib/fajr.mp3
+
 # Build RAG index (no API key needed — runs locally)
 RUN python rag/ingest.py
 
