@@ -1,14 +1,17 @@
 """
-RAG Chat — with live prayer-time tool use
-==========================================
+RAG Chat — with live prayer-time tool use and Quran MCP
+========================================================
 
-Answers two kinds of questions:
+Answers three kinds of questions:
   1. Knowledge questions ("What is the ISNA method?")
      → standard RAG: retrieve chunks → Ollama generates answer
 
   2. Live calculation questions ("When is Fajr in Toronto tomorrow?")
      → tool use: Ollama calls get_prayer_times(city, date) → PrayerService
        calculates using adhanpy → Ollama formulates the answer
+
+  3. Quran questions ("What does 2:255 say?", "verses about patience")
+     → Quran MCP: JSON-RPC call to mcp.quran.ai → Ollama formats the answer
 
 No API keys required — all inference runs locally via Ollama.
 
@@ -19,16 +22,127 @@ Usage:
 
 from __future__ import annotations
 
+import json
+import re
 import sys
+import uuid
 from pathlib import Path
 
 _root = Path(__file__).parent.parent
 sys.path.insert(0, str(_root))
 
 import ollama
+import requests
 from rag.query import (  # noqa: E402
     INDEX_PATH, OLLAMA_MODEL, answer, answer_stream, load_clients, load_index,
 )
+
+# ── Quran MCP ────────────────────────────────────────────────────────────────
+
+QURAN_MCP_URL = "https://mcp.quran.ai/"
+_MCP_HEADERS = {
+    "Accept": "application/json, text/event-stream",
+    "Content-Type": "application/json",
+}
+
+
+_SSE_FIELD_NAMES = {"event:", "data:", "id:", "retry:"}
+
+
+def _parse_sse(text: str) -> dict:
+    """Parse an SSE response, reassembling multi-line data fields.
+
+    The Quran MCP server embeds literal newlines in Arabic text inside its JSON,
+    which splits a single data: event across multiple raw lines.  We reassemble
+    all non-field continuation lines back into the data payload before parsing.
+    """
+    for event_block in text.split("\n\n"):
+        fragments: list[str] = []
+        in_data = False
+        for line in event_block.splitlines():
+            if line.startswith("data: "):
+                in_data = True
+                fragments.append(line[6:])
+            elif in_data and not any(line.startswith(f) for f in _SSE_FIELD_NAMES):
+                fragments.append(line)
+        if fragments:
+            try:
+                return json.loads("\n".join(fragments))
+            except json.JSONDecodeError:
+                pass
+    return {}
+
+
+def _quran_session() -> dict:
+    """Initialize a Quran MCP session and return headers with the session ID."""
+    resp = requests.post(
+        QURAN_MCP_URL,
+        json={
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "my-adhan", "version": "1.0"},
+            },
+        },
+        headers=_MCP_HEADERS,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    session_id = resp.headers.get("mcp-session-id", "")
+    return {**_MCP_HEADERS, "mcp-session-id": session_id}
+
+
+def _call_quran_tool(tool_name: str, arguments: dict, headers: dict) -> str:
+    """Call a Quran MCP tool with an established session. Returns the text content."""
+    args = {**arguments, "grounding_nonce": str(uuid.uuid4())}
+    resp = requests.post(
+        QURAN_MCP_URL,
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+              "params": {"name": tool_name, "arguments": args}},
+        headers=headers,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = _parse_sse(resp.text)
+    if "error" in data:
+        raise RuntimeError(data["error"])
+    content = data.get("result", {}).get("content", [])
+    return "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+
+
+_QURAN_SYSTEM = (
+    "You are an Islamic assistant with access to Quran text and translations. "
+    "Present the Quran data clearly and respectfully, including Arabic text and "
+    "its English translation. Add brief context about the verse or topic if helpful."
+)
+
+_VERSE_RE = re.compile(r'\b(\d+):(\d+(?:-\d+)?)\b')
+
+
+def _answer_via_quran(question: str, model: str) -> str:
+    """Query Quran MCP and format the result with Ollama."""
+    try:
+        hdrs = _quran_session()
+        verse_match = _VERSE_RE.search(question)
+        if verse_match:
+            ayah_ref = verse_match.group(0)
+            arabic = _call_quran_tool("fetch_quran", {"ayahs": ayah_ref}, hdrs)
+            translation = _call_quran_tool("fetch_translation", {"ayahs": ayah_ref}, hdrs)
+            quran_data = f"Arabic:\n{arabic}\n\nTranslation:\n{translation}"
+        else:
+            quran_data = _call_quran_tool("search_quran", {"query": question}, hdrs)
+    except Exception as exc:
+        return f"Could not reach the Quran service: {exc}"
+
+    resp = ollama.chat(
+        model=model,
+        messages=[
+            {"role": "system", "content": _QURAN_SYSTEM},
+            {"role": "user", "content": f"Question: {question}\n\nQuran data:\n{quran_data}"},
+        ],
+    )
+    return resp["message"]["content"]
 
 # ── Prayer-time tool definition (OpenAI / Ollama format) ─────────────────────
 
@@ -71,7 +185,10 @@ _CLASSIFIER_SYSTEM = (
     "Classify the user's question. Reply with exactly one word.\n"
     "Reply TOOL if they are asking for actual prayer times for a specific city, "
     "place, or date (e.g. 'when is Fajr in Toronto', 'prayer times tomorrow').\n"
-    "Reply RAG for everything else (concepts, methods, app usage, how-to)."
+    "Reply QURAN if they are asking about the Quran: verse references like '2:255', "
+    "surah content, searching for Quranic topics, or wanting to read specific ayahs.\n"
+    "Reply RAG for everything else (prayer concepts, calculation methods, app usage, "
+    "general Islamic practices, how-to questions)."
 )
 
 _TOOL_SYSTEM = (
@@ -84,13 +201,18 @@ _TOOL_SYSTEM = (
 
 
 def _classify(question: str, model: str, history: list[dict] | None = None) -> str:
-    """Returns 'TOOL' or 'RAG'. Includes recent history so follow-ups are routed correctly."""
+    """Returns 'TOOL', 'QURAN', or 'RAG'. Includes recent history for follow-up routing."""
     messages = [{"role": "system", "content": _CLASSIFIER_SYSTEM}]
     if history:
-        messages.extend(history[-4:])  # last 2 turns for context
+        messages.extend(history[-4:])
     messages.append({"role": "user", "content": question})
     resp = ollama.chat(model=model, messages=messages)
-    return "TOOL" if "TOOL" in resp["message"]["content"].upper() else "RAG"
+    text = resp["message"]["content"].upper()
+    if "TOOL" in text:
+        return "TOOL"
+    if "QURAN" in text:
+        return "QURAN"
+    return "RAG"
 
 
 def _answer_via_tool(question: str, model: str, history: list[dict] | None = None) -> str:
@@ -165,6 +287,9 @@ def answer_stream_with_tools(
     route = _classify(q, model, history=history)
     if route == "TOOL":
         text = _answer_via_tool(q, model, history=history)
+        return iter([text]), []
+    if route == "QURAN":
+        text = _answer_via_quran(q, model)
         return iter([text]), []
 
     return _answer_stream_with_history(q, records, matrix, embedder, model, history)
