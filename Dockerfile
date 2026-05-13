@@ -31,7 +31,7 @@ RUN python rag/ingest.py
 
 # Download Ollama model at build time so the container starts instantly
 ENV OLLAMA_MODELS=/app/ollama_models
-RUN ollama serve & sleep 6 && ollama pull llama3.2:3b && pkill ollama || true
+RUN ollama serve & OLLAMA_PID=$! && sleep 6 && ollama pull llama3.2:3b && kill $OLLAMA_PID || true
 
 EXPOSE 7860
 
