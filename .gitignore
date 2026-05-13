@@ -7,4 +7,4 @@ __pycache__/
 venv/
 rag/index.json
 adhan.log
-adhan.pid*.mp3
+adhan.pid
