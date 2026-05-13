@@ -187,12 +187,16 @@ function adhanApp() {
       let nextName = '';
 
       if (next === adhan.Prayer.None) {
-        // Past Isha — show Fajr tomorrow
+        // Past Isha — switch grid to tomorrow and count down to Fajr
         const tomorrow = new Date(now);
         tomorrow.setDate(tomorrow.getDate() + 1);
         const tomorrowPt = new adhan.PrayerTimes(this.coordinates, tomorrow, this._getParams());
         nextTime = tomorrowPt.fajr;
         nextName = 'Fajr';
+        this.prayers = PRAYER_NAMES.map(n => ({
+          name: n,
+          time: tomorrowPt[n.toLowerCase()].toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }));
       } else {
         nextName = next.charAt(0).toUpperCase() + next.slice(1);
       }
@@ -207,8 +211,6 @@ function adhanApp() {
         this.countdownText = h > 0
           ? `${nextName} in ${h}h ${m}m ${s}s`
           : `${nextName} in ${m}m ${s}s`;
-      } else {
-        this.countdownText = 'All prayers done for today.';
       }
     },
 

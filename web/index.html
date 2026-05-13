@@ -36,11 +36,14 @@
     .main-row {            /* two-column row */
       flex: 1;
       min-height: 0;
+      flex-wrap: nowrap !important;
+      overflow: hidden;
     }
     .left-col, .right-col {
       display: flex;
       flex-direction: column;
       min-height: 0;
+      overflow: hidden;
     }
 
     /* ── cards ── */
@@ -54,7 +57,7 @@
       border-color: var(--border) !important;
       color: #fff !important;
     }
-    .card-chat { border-color: #2a5298 !important; }
+    .card-chat { border-color: #2a5298 !important; overflow: hidden; }
 
     /* ── top bar ── */
     .btn-adhan { font-size: .8rem; padding: .3rem .75rem; border: none; border-radius: .3rem; color: #fff; cursor: pointer; }
@@ -69,7 +72,7 @@
     .greg-date  { color: #fff; font-size: .85rem; }
     .big-clock  { font-size: 3rem; font-weight: 700; letter-spacing: .04em; line-height: 1.15; color: #fff; }
     .location   { color: #fff; font-size: .85rem; margin-top: .2rem; }
-    .countdown  { font-size: 3rem; font-weight: 700; color: var(--blue); line-height: 1.15; }
+    .countdown  { font-size: 3rem; font-weight: 700; color: var(--blue); line-height: 1.15; white-space: nowrap; }
     .prayer-divider { border-top: 1px solid var(--border); margin: .4rem 0; }
 
     /* ── prayer grid ── */
