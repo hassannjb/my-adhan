@@ -47,15 +47,38 @@ _MCP_HEADERS = {
 
 
 _SSE_FIELD_NAMES = {"event:", "data:", "id:", "retry:"}
+_CTRL_ESCAPES = {"\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _repair_json(s: str) -> str:
+    """Escape unescaped control characters inside JSON string values.
+
+    The Quran MCP server sends Arabic verse text with literal newlines embedded
+    inside JSON string values, which is invalid JSON.  Walk character-by-character
+    and replace bare control chars inside strings with their JSON escape sequences.
+    """
+    result: list[str] = []
+    in_string = False
+    escaped = False
+    for ch in s:
+        if escaped:
+            result.append(ch)
+            escaped = False
+        elif in_string and ch == "\\":
+            result.append(ch)
+            escaped = True
+        elif ch == '"':
+            result.append(ch)
+            in_string = not in_string
+        elif in_string and ch in _CTRL_ESCAPES:
+            result.append(_CTRL_ESCAPES[ch])
+        else:
+            result.append(ch)
+    return "".join(result)
 
 
 def _parse_sse(text: str) -> dict:
-    """Parse an SSE response, reassembling multi-line data fields.
-
-    The Quran MCP server embeds literal newlines in Arabic text inside its JSON,
-    which splits a single data: event across multiple raw lines.  We reassemble
-    all non-field continuation lines back into the data payload before parsing.
-    """
+    """Parse an SSE response, reassembling multi-line data fields."""
     for event_block in text.split("\n\n"):
         fragments: list[str] = []
         in_data = False
@@ -67,7 +90,7 @@ def _parse_sse(text: str) -> dict:
                 fragments.append(line)
         if fragments:
             try:
-                return json.loads("\n".join(fragments))
+                return json.loads(_repair_json("\n".join(fragments)))
             except json.JSONDecodeError:
                 pass
     return {}
@@ -94,7 +117,7 @@ def _quran_session() -> dict:
 
 
 def _call_quran_tool(tool_name: str, arguments: dict, headers: dict) -> str:
-    """Call a Quran MCP tool with an established session. Returns the text content."""
+    """Call a Quran MCP tool with an established session. Returns the JSON data text only."""
     args = {**arguments, "grounding_nonce": str(uuid.uuid4())}
     resp = requests.post(
         QURAN_MCP_URL,
@@ -108,16 +131,49 @@ def _call_quran_tool(tool_name: str, arguments: dict, headers: dict) -> str:
     if "error" in data:
         raise RuntimeError(data["error"])
     content = data.get("result", {}).get("content", [])
-    return "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+    # The first text item is the JSON payload; remaining items are server instructions
+    for item in content:
+        if item.get("type") == "text":
+            return item.get("text", "")
+    return ""
 
 
 _QURAN_SYSTEM = (
-    "You are an Islamic assistant with access to Quran text and translations. "
-    "Present the Quran data clearly and respectfully, including Arabic text and "
-    "its English translation. Add brief context about the verse or topic if helpful."
+    "You are an Islamic assistant. You have been given Quran data retrieved from the "
+    "quran.ai database. Use ONLY the provided data to answer — do not add information "
+    "from memory or training data. Present the verses clearly and respectfully. "
+    "If the data doesn't contain a specific answer (e.g. an exact count), say so honestly "
+    "and present what was found. Do not make up numbers, verse references, or translations."
 )
 
 _VERSE_RE = re.compile(r'\b(\d+):(\d+(?:-\d+)?)\b')
+
+
+def _format_search_results(raw_json: str) -> str:
+    """Parse search_quran JSON and return a clean human-readable summary for Ollama."""
+    try:
+        repaired = _repair_json(raw_json)
+        # Strip trailing non-JSON content (server grounding instructions)
+        end = repaired.rfind("}")
+        if end != -1:
+            repaired = repaired[: end + 1]
+        data = json.loads(repaired)
+        results = data.get("results", [])
+        total = data.get("total_found") or len(results)
+        if not results:
+            return "No relevant verses found."
+        lines = [f"Total found in database: {total} verse(s). Top results:\n"]
+        for r in results[:10]:
+            key = r.get("ayah_key", "?")
+            translations = r.get("translations", [])
+            if translations:
+                trans_text = translations[0].get("text", "")
+                lines.append(f"- {key}: {trans_text}")
+            else:
+                lines.append(f"- {key}")
+        return "\n".join(lines)
+    except Exception:
+        return raw_json[:2000]  # truncated fallback
 
 
 def _answer_via_quran(question: str, model: str) -> str:
@@ -127,11 +183,15 @@ def _answer_via_quran(question: str, model: str) -> str:
         verse_match = _VERSE_RE.search(question)
         if verse_match:
             ayah_ref = verse_match.group(0)
-            arabic = _call_quran_tool("fetch_quran", {"ayahs": ayah_ref}, hdrs)
             translation = _call_quran_tool("fetch_translation", {"ayahs": ayah_ref}, hdrs)
-            quran_data = f"Arabic:\n{arabic}\n\nTranslation:\n{translation}"
+            quran_data = f"Translation of {ayah_ref}:\n{translation}"
         else:
-            quran_data = _call_quran_tool("search_quran", {"query": question}, hdrs)
+            raw = _call_quran_tool(
+                "search_quran",
+                {"query": question, "translations": "en-sahih-international"},
+                hdrs,
+            )
+            quran_data = _format_search_results(raw)
     except Exception as exc:
         return f"Could not reach the Quran service: {exc}"
 
@@ -139,7 +199,7 @@ def _answer_via_quran(question: str, model: str) -> str:
         model=model,
         messages=[
             {"role": "system", "content": _QURAN_SYSTEM},
-            {"role": "user", "content": f"Question: {question}\n\nQuran data:\n{quran_data}"},
+            {"role": "user", "content": f"Question: {question}\n\nQuran data from quran.ai:\n{quran_data}"},
         ],
     )
     return resp["message"]["content"]
