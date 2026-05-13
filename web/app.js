@@ -62,7 +62,8 @@ function adhanApp() {
     chatLang:         'English',
     inputPlaceholder: PLACEHOLDERS.English,
     question:         '',
-    messages:         [],   // [{role:'user'|'assistant', content:''}]
+    messages:         [],    // completed turns [{role, content}]
+    streamingContent: '',    // live content of the in-progress assistant reply
     chatLoading:      false,
     recognizing:      false,
     _recognition:     null,
@@ -291,10 +292,9 @@ function adhanApp() {
       const q = this.question.trim();
       this.question = '';
       this.chatLoading = true;
+      this.streamingContent = '';
 
-      this.messages.push({ role: 'user',      content: q });
-      this.messages.push({ role: 'assistant', content: '' });
-      const idx = this.messages.length - 1;
+      this.messages.push({ role: 'user', content: q });
 
       const box = document.querySelector('.answer-box');
 
@@ -303,7 +303,7 @@ function adhanApp() {
         const resp = await fetch(url);
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
-          this.messages[idx].content = err.error || 'Server error.';
+          this.messages.push({ role: 'assistant', content: err.error || 'Server error.' });
           return;
         }
 
@@ -323,14 +323,17 @@ function adhanApp() {
             const raw = line.slice(6).trim();
             if (raw === '[DONE]') break;
             try {
-              this.messages[idx].content += JSON.parse(raw);
+              this.streamingContent += JSON.parse(raw);
               if (box) box.scrollTop = box.scrollHeight;
             } catch (_) {}
           }
         }
       } catch (e) {
-        this.messages[idx].content = `Error: ${e.message}`;
+        this.streamingContent = `Error: ${e.message}`;
       } finally {
+        // Commit the completed reply to messages, clear the stream buffer
+        this.messages.push({ role: 'assistant', content: this.streamingContent });
+        this.streamingContent = '';
         this.chatLoading = false;
         if (box) box.scrollTop = box.scrollHeight;
       }

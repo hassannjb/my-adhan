@@ -282,13 +282,18 @@
 
           <!-- Conversation thread — fills remaining height -->
           <div class="answer-box">
-            <span x-show="messages.length === 0" class="answer-placeholder">Answer will appear here…</span>
+            <span x-show="messages.length === 0 && !chatLoading" class="answer-placeholder">Answer will appear here…</span>
             <template x-for="(msg, i) in messages" :key="i">
               <div :class="'msg-' + msg.role">
                 <span class="msg-label" x-text="msg.role === 'user' ? 'You' : 'Assistant'"></span>
                 <span x-text="msg.content"></span>
               </div>
             </template>
+            <!-- Live streaming bubble -->
+            <div x-show="chatLoading" class="msg-assistant">
+              <span class="msg-label">Assistant</span>
+              <span x-text="streamingContent || '…'"></span>
+            </div>
           </div>
 
         </div>
