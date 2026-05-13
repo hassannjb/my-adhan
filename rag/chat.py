@@ -200,8 +200,18 @@ _TOOL_SYSTEM = (
 )
 
 
+_QURAN_KEYWORDS = re.compile(
+    r'\b(quran|quranic|surah|ayah|ayat|verse|verses|sura|جزء|آية|سورة)\b',
+    re.IGNORECASE,
+)
+
+
 def _classify(question: str, model: str, history: list[dict] | None = None) -> str:
     """Returns 'TOOL', 'QURAN', or 'RAG'. Includes recent history for follow-up routing."""
+    # Fast keyword pre-check for unambiguous Quran signals
+    if _QURAN_KEYWORDS.search(question) or _VERSE_RE.search(question):
+        return "QURAN"
+
     messages = [{"role": "system", "content": _CLASSIFIER_SYSTEM}]
     if history:
         messages.extend(history[-4:])
