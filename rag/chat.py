@@ -467,12 +467,233 @@ _QURAN_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+_DATE_KEYWORDS = re.compile(
+    r'\b(hijri|islamic\s+date|islamic\s+calendar|hijra|'
+    r'muharram|safar|rabi|jumada|rajab|sha.?ban|ramadan|shawwal|'
+    r'dhul?\s*qi.?dah|dhul?\s*qa.?dah|dhul?\s*hijjah|zul\s*qa.?dah|'
+    r'1[34]\d{2}\s*ah)\b',
+    re.IGNORECASE,
+)
+
+# ── Hijri ↔ Gregorian date conversion ────────────────────────────────────────
+
+_HIJRI_MONTH_NAMES = {
+    1: "Muharram", 2: "Safar", 3: "Rabi' al-Awwal", 4: "Rabi' al-Thani",
+    5: "Jumada al-Awwal", 6: "Jumada al-Thani", 7: "Rajab", 8: "Sha'ban",
+    9: "Ramadan", 10: "Shawwal", 11: "Dhul Qa'dah", 12: "Dhul Hijjah",
+}
+
+_HIJRI_MONTH_NUMS: dict[str, int] = {}
+
+def _hm(*pairs: tuple[int, str]) -> None:
+    for n, name in pairs:
+        k = name.lower().replace(" ", "").replace("-", "").replace("'", "")
+        _HIJRI_MONTH_NUMS[k] = n
+
+_hm(
+    (1,  "muharram"),  (1,  "muharam"),  (1,  "muharrum"),
+    (2,  "safar"),
+    (3,  "rabi al awwal"), (3, "rabi al-awwal"), (3, "rabialawwal"),
+    (3,  "rabi ul awwal"), (3, "rabiulawal"), (3, "rabiawal"),
+    (3,  "rabi i"),    (3, "rabii"),
+    (4,  "rabi al thani"), (4, "rabi al-thani"), (4, "rabialthani"),
+    (4,  "rabi al akhir"), (4, "rabi ii"),  (4, "rabiii"),
+    (5,  "jumada al awwal"), (5, "jumad al awwal"), (5, "jumadaalawwal"),
+    (5,  "jumada i"),  (5, "jumadai"),
+    (6,  "jumada al thani"), (6, "jumad al thani"), (6, "jumadaakhirah"),
+    (6,  "jumada ii"), (6, "jumadaii"),
+    (7,  "rajab"),
+    (8,  "shaban"),    (8,  "sha ban"),   (8,  "shaaban"),
+    (9,  "ramadan"),   (9,  "ramzan"),    (9,  "ramazan"),
+    (10, "shawwal"),
+    (11, "dhul qadah"),  (11, "dhul qidah"),  (11, "dhulqadah"),
+    (11, "dhulqidah"),   (11, "dhul qi dah"), (11, "zul qadah"),
+    (11, "zulqadah"),    (11, "dhulqaadah"),  (11, "dhiqadah"),
+    (12, "dhul hijjah"), (12, "dhul hija"),   (12, "dhulhijjah"),
+    (12, "zul hijjah"),  (12, "zulhijjah"),   (12, "dhihijjah"),
+)
+del _hm
+
+_GREGORIAN_MONTH_NUMS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+    "january": 1, "february": 2, "march": 3, "april": 4, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10,
+    "november": 11, "december": 12,
+}
+
+DATE_CONVERSION_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "convert_date",
+        "description": (
+            "Convert between Gregorian and Islamic (Hijri) calendar dates. "
+            "Use hijri_to_gregorian when the user gives an Islamic date and wants the Gregorian date. "
+            "Use gregorian_to_hijri when the user gives a Gregorian date and wants the Islamic date."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "direction": {
+                    "type": "string",
+                    "enum": ["hijri_to_gregorian", "gregorian_to_hijri"],
+                },
+                "day": {"type": "integer", "description": "Day of the month"},
+                "month": {
+                    "type": "string",
+                    "description": (
+                        "For hijri_to_gregorian: Hijri month name (e.g. 'Dhul Qidah', 'Ramadan'). "
+                        "For gregorian_to_hijri: Gregorian month name or number."
+                    ),
+                },
+                "year": {
+                    "type": "integer",
+                    "description": "Year. Hijri year for H→G; Gregorian year for G→H. "
+                                   "Omit to use the current year.",
+                },
+            },
+            "required": ["direction", "day", "month"],
+        },
+    },
+}
+
+def _detect_date_direction(question: str) -> str:
+    """Return 'hijri_to_gregorian' if the question contains a Hijri month name,
+    otherwise 'gregorian_to_hijri'."""
+    q_norm = question.lower().replace(" ", "").replace("-", "").replace("'", "")
+    for key in _HIJRI_MONTH_NUMS:
+        if key in q_norm:
+            return "hijri_to_gregorian"
+    return "gregorian_to_hijri"
+
+
+def _run_date_conversion(direction: str, day: int, month: str, year: int | None) -> str:
+    from hijridate import Hijri, Gregorian
+    import datetime
+
+    today = datetime.date.today()
+
+    if direction == "hijri_to_gregorian":
+        if year is None:
+            h_today = Gregorian(today.year, today.month, today.day).to_hijri()
+            year = h_today.year
+        key = str(month).lower().replace(" ", "").replace("-", "").replace("'", "")
+        month_num = _HIJRI_MONTH_NUMS.get(key)
+        if month_num is None:
+            return f"Unknown Hijri month: '{month}'"
+        try:
+            g = Hijri(year, month_num, day).to_gregorian()
+            month_name = _HIJRI_MONTH_NAMES[month_num]
+            return (f"{day} {month_name} {year} AH  →  "
+                    f"{g.strftime('%A, %d %B %Y')}")
+        except Exception as e:
+            return f"Conversion error: {e}"
+
+    elif direction == "gregorian_to_hijri":
+        if year is None:
+            year = today.year
+        key = str(month).lower().strip()
+        month_num = (
+            _GREGORIAN_MONTH_NUMS.get(key)
+            or _GREGORIAN_MONTH_NUMS.get(key[:3])
+            or (int(key) if key.isdigit() else None)
+        )
+        if month_num is None:
+            return f"Unknown Gregorian month: '{month}'"
+        try:
+            h = Gregorian(year, month_num, day).to_hijri()
+            import calendar
+            g_month_name = calendar.month_name[month_num]
+            h_month_name = _HIJRI_MONTH_NAMES[h.month]
+            return (f"{day} {g_month_name} {year}  →  "
+                    f"{h.day} {h_month_name} {h.year} AH")
+        except Exception as e:
+            return f"Conversion error: {e}"
+
+    return "Unknown conversion direction."
+
+
+_GREG_DATE_RE = re.compile(
+    r'\b(\d+)(?:st|nd|rd|th)?\s+(?:of\s+)?(january|february|march|april|may|june|july|'
+    r'august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)'
+    r'\s*,?\s*(\d{4})\b',
+    re.IGNORECASE,
+)
+
+
+def _extract_hijri_date(question: str) -> tuple[int, str, int | None] | None:
+    """Return (day, month_key, year|None) from a question with a Hijri date."""
+    q_norm = question.lower().replace("-", "").replace("'", "").replace(" ", "")
+    found_key = found_num = None
+    for key, num in sorted(_HIJRI_MONTH_NUMS.items(), key=lambda x: -len(x[0])):
+        if key in q_norm:
+            found_key, found_num = key, num
+            break
+    if found_key is None:
+        return None
+    numbers = [int(n) for n in re.findall(r'\d+', question)]
+    day = next((n for n in numbers if 1 <= n <= 31), None)
+    year = next((n for n in numbers if 1300 <= n <= 1600), None)
+    if day is None:
+        return None
+    return day, found_key, year
+
+
+def _extract_gregorian_date(question: str) -> tuple[int, str, int] | None:
+    """Return (day, month_str, year) from a question with a Gregorian date."""
+    m = _GREG_DATE_RE.search(question)
+    if m:
+        return int(m.group(1)), m.group(2), int(m.group(3))
+    # Try "YYYY-MM-DD" or "DD/MM/YYYY"
+    m2 = re.search(r'(\d{4})-(\d{1,2})-(\d{1,2})', question)
+    if m2:
+        return int(m2.group(3)), str(int(m2.group(2))), int(m2.group(1))
+    m3 = re.search(r'(\d{1,2})/(\d{1,2})/(\d{4})', question)
+    if m3:
+        return int(m3.group(1)), str(int(m3.group(2))), int(m3.group(3))
+    return None
+
+
+def _answer_via_date(question: str, model: str) -> str:
+    """Extract date via regex, convert, format result with Ollama."""
+    direction = _detect_date_direction(question)
+
+    if direction == "hijri_to_gregorian":
+        parsed = _extract_hijri_date(question)
+        if parsed:
+            day, month_key, year = parsed
+            result = _run_date_conversion("hijri_to_gregorian", day, month_key, year)
+        else:
+            result = None
+    else:
+        parsed = _extract_gregorian_date(question)
+        if parsed:
+            day, month_str, year = parsed
+            result = _run_date_conversion("gregorian_to_hijri", day, month_str, year)
+        else:
+            result = None
+
+    if result is None:
+        return "Sorry, I couldn't extract a date from that question. Try something like '29th Dhul Qidah 1447' or '13 May 2026'."
+
+    # Use Ollama to turn the raw conversion line into a natural response
+    resp = ollama.chat(
+        model=model,
+        messages=[
+            {"role": "system", "content": "Present the date conversion result naturally and briefly."},
+            {"role": "user", "content": f"Question: {question}\nConversion result: {result}"},
+        ],
+    )
+    return resp["message"]["content"]
+
 
 def _classify(question: str, model: str, history: list[dict] | None = None) -> str:
-    """Returns 'TOOL', 'QURAN', or 'RAG'. Includes recent history for follow-up routing."""
-    # Fast keyword pre-check for unambiguous Quran signals
+    """Returns 'TOOL', 'QURAN', 'DATE', or 'RAG'."""
+    # Fast keyword pre-checks (bypass LLM for unambiguous signals)
     if _QURAN_KEYWORDS.search(question) or _VERSE_RE.search(question):
         return "QURAN"
+    if _DATE_KEYWORDS.search(question):
+        return "DATE"
 
     messages = [{"role": "system", "content": _CLASSIFIER_SYSTEM}]
     if history:
@@ -562,6 +783,9 @@ def answer_stream_with_tools(
         return iter([text]), []
     if route == "QURAN":
         text = _answer_via_quran(q, model)
+        return iter([text]), []
+    if route == "DATE":
+        text = _answer_via_date(q, model)
         return iter([text]), []
 
     return _answer_stream_with_history(q, records, matrix, embedder, model, history)
