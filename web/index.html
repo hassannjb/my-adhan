@@ -16,36 +16,26 @@
       --blue:    #5dade2;
     }
 
-    /* ── full-height flex skeleton ── */
-    html, body { height: 100%; margin: 0; }
+    /* ── full-height flex skeleton (desktop only) ── */
     body {
       background: var(--bg);
       color: #fff;
       font-family: system-ui, sans-serif;
-      padding: 5vh 10vw;
+      padding: 4vw 5vw;
       box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-    }
-    body > div {           /* Alpine root */
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: 0;
-    }
-    .main-row {            /* two-column row */
-      flex: 1;
-      min-height: 0;
-      overflow: hidden;
-    }
-    @media (min-width: 768px) {
-      .main-row { flex-wrap: nowrap !important; }
     }
     .left-col, .right-col {
       display: flex;
       flex-direction: column;
-      min-height: 0;
-      overflow: hidden;
+    }
+    .main-row { overflow: visible; }
+
+    @media (min-width: 768px) {
+      html, body { height: 100%; margin: 0; }
+      body { display: flex; flex-direction: column; padding: 5vh 10vw; }
+      body > div { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+      .main-row { flex: 1; min-height: 0; overflow: hidden; flex-wrap: nowrap !important; }
+      .left-col, .right-col { min-height: 0; overflow: hidden; }
     }
 
     /* ── cards ── */
@@ -59,7 +49,8 @@
       border-color: var(--border) !important;
       color: #fff !important;
     }
-    .card-chat { border-color: #2a5298 !important; overflow: hidden; }
+    .card-chat { border-color: #2a5298 !important; }
+    @media (min-width: 768px) { .card-chat { overflow: hidden; } }
 
     /* ── top bar ── */
     .btn-adhan { font-size: .8rem; padding: .3rem .75rem; border: none; border-radius: .3rem; color: #fff; cursor: pointer; }
@@ -92,10 +83,13 @@
       padding: .75rem;
       font-size: .9rem;
       color: #fff;
-      flex: 1;
       min-height: 120px;
+      max-height: 55vh;    /* mobile: own scrollbar, bounded height */
       overflow-y: auto;
       word-break: break-word;
+    }
+    @media (min-width: 768px) {
+      .answer-box { flex: 1; max-height: none; }  /* desktop: fills card via flex */
     }
     .answer-placeholder { color: rgba(255,255,255,.35); font-style: italic; }
     .msg-user      { color: var(--gold); margin-bottom: .35rem; white-space: pre-wrap; }
