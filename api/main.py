@@ -1,9 +1,12 @@
 """
 FastAPI backend for the Adhan Clock web app.
 
-  GET  /api/chat              — streams RAG answers as SSE (session-aware)
-  GET  /api/status            — RAG index health
-  DELETE /api/session/{id}    — clear a conversation session early
+  GET  /api/chat              : answers a question as JSON (see assistant/router.py)
+  GET  /api/status            : assistant health
+  DELETE /api/session/{id}    : kept for older pages; there is no server-side session now
+
+The chat no longer uses an LLM: answers come from the curated assistant/faq.md,
+and prayer times are calculated in the browser from the user's own settings.
 
 Run:
     uvicorn api.main:app --reload --port 8000
@@ -14,12 +17,11 @@ import json
 import logging
 import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 _ROOT = Path(__file__).parent.parent
@@ -27,51 +29,25 @@ sys.path.insert(0, str(_ROOT))
 
 logger = logging.getLogger(__name__)
 
-# ── RAG state ────────────────────────────────────────────────────────────────
+# ── Assistant state ──────────────────────────────────────────────────────────
 
-_rag: dict = {}
+_state: dict = {}
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        from rag.query import INDEX_PATH, load_clients, load_index
-        if not INDEX_PATH.exists():
-            raise FileNotFoundError("Index not found — run: python rag/ingest.py")
-        _rag["records"], _rag["matrix"] = load_index(INDEX_PATH)
-        _rag["embedder"], _rag["model"] = load_clients()
-        _rag["ready"] = True
-        _rag["chunks"] = len(_rag["records"])
-        logger.info("RAG index loaded: %d chunks", _rag["chunks"])
-    except (Exception, SystemExit) as e:
-        _rag["ready"] = False
-        _rag["error"] = str(e)
-        logger.warning("RAG unavailable: %s", e)
+        from assistant.router import Assistant
+        _state["assistant"] = Assistant()
+        _state["ready"] = True
+        logger.info("assistant ready: %d answers, %s matching",
+                    len(_state["assistant"].faq.entries), _state["assistant"].faq.mode)
+    except Exception as e:
+        _state["ready"] = False
+        _state["error"] = str(e)
+        logger.warning("assistant unavailable: %s", e)
     yield
-    _rag.clear()
-
-
-# ── Session store (in-memory, 30-min TTL) ────────────────────────────────────
-
-_SESSION_TTL = timedelta(minutes=30)
-_sessions: dict[str, dict] = {}
-
-
-def _get_history(session_id: str) -> list[dict]:
-    s = _sessions.get(session_id)
-    if not s:
-        return []
-    if datetime.now() - s["last_active"] > _SESSION_TTL:
-        _sessions.pop(session_id, None)
-        return []
-    return list(s["messages"])
-
-
-def _save_turn(session_id: str, user_msg: str, assistant_msg: str) -> None:
-    s = _sessions.setdefault(session_id, {"messages": [], "last_active": datetime.now()})
-    s["messages"].append({"role": "user",      "content": user_msg})
-    s["messages"].append({"role": "assistant", "content": assistant_msg})
-    s["last_active"] = datetime.now()
+    _state.clear()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -89,59 +65,42 @@ app.add_middleware(
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
-async def status():
+def status():
+    a = _state.get("assistant")
     return {
-        "ready":  _rag.get("ready", False),
-        "chunks": _rag.get("chunks", 0),
-        "error":  _rag.get("error"),
+        "ready":   _state.get("ready", False),
+        "answers": len(a.faq.entries) if a else 0,
+        "mode":    a.faq.mode if a else None,
+        "error":   _state.get("error"),
     }
 
 
+# Plain `def` so FastAPI runs it in a thread: city lookups block on HTTP.
 @app.get("/api/chat")
-async def chat(
-    q:          str = Query(...,       description="User question"),
-    language:   str = Query("English", description="Reply language"),
-    session_id: str = Query("",        description="Session ID for conversation memory"),
+def chat(
+    q:        str = Query(...,       description="User question", max_length=500),
+    prev:     str = Query("",        description="JSON of the previous times reply, for follow-ups"),
+    language: str = Query("English", description="Ignored for now: answers are English only"),
 ):
-    if not _rag.get("ready"):
-        err = _rag.get("error", "RAG index not loaded.")
-        return JSONResponse({"error": err}, status_code=503)
-
-    history = _get_history(session_id) if session_id else []
-
-    def generate():
-        from rag.chat import answer_stream_with_tools
-        full: list[str] = []
+    if not _state.get("ready"):
+        return JSONResponse({"error": _state.get("error", "Assistant not loaded.")}, status_code=503)
+    prev_obj = None
+    if prev:
         try:
-            stream, _ = answer_stream_with_tools(
-                q,
-                _rag["records"],
-                _rag["matrix"],
-                _rag["embedder"],
-                _rag["model"],
-                language=language,
-                history=history,
-            )
-            for token in stream:
-                full.append(token)
-                yield f"data: {json.dumps(token)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps(f'Error: {e}')}\n\n"
-        finally:
-            if session_id and full:
-                _save_turn(session_id, q, "".join(full))
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+            prev_obj = json.loads(prev)
+            if not isinstance(prev_obj, dict):
+                prev_obj = None
+        except ValueError:
+            prev_obj = None
+    try:
+        return _state["assistant"].answer(q, prev=prev_obj)
+    except Exception:
+        logger.exception("chat failed for %r", q)
+        return {"kind": "error", "text": "Something went wrong answering that. Please try rephrasing."}
 
 
 @app.delete("/api/session/{session_id}")
 async def reset_session(session_id: str):
-    _sessions.pop(session_id, None)
     return {"ok": True}
 
 

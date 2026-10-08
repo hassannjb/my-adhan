@@ -6,7 +6,9 @@
  * Voice input               : Web Speech API (SpeechRecognition)
  * TTS                       : Web Speech API (SpeechSynthesis)
  * Audio playback            : HTML5 Audio (files served from /audio/)
- * RAG chatbot               : GET /api/chat  (SSE stream from FastAPI backend)
+ * Chat assistant            : GET /api/chat  (JSON; curated answers, no LLM).
+ *                             Prayer times in chat are calculated here with the
+ *                             same _getParams() as the clock, so they always agree.
  */
 
 const PRAYER_NAMES = ['Fajr', 'Sunrise', 'Dhuhr', 'Asr', 'Maghrib', 'Isha'];
@@ -21,11 +23,75 @@ const LANG_SPEECH = {
 
 const PLACEHOLDERS = {
   English: 'e.g. When is Fajr in Toronto tomorrow?',
-  Urdu:    'مثلاً: کل فجر کا وقت کیا ہے؟',
-  Hindi:   'उदा.: कल फजर का समय क्या है?',
-  Turkish: 'Örn.: Yarın İstanbul\'da Fajr vakti ne zaman?',
-  Arabic:  'مثال: ما وقت صلاة الفجر في القاهرة غدًا؟',
 };
+
+const METHOD_LABELS = {
+  NorthAmerica: 'North America (ISNA)', MuslimWorldLeague: 'Muslim World League',
+  Egyptian: 'Egyptian', Karachi: 'Karachi', UmmAlQura: 'Umm al-Qura',
+  Dubai: 'Dubai', Qatar: 'Qatar', Kuwait: 'Kuwait',
+  MoonsightingCommittee: 'Moonsighting Committee', Singapore: 'Singapore',
+  Tehran: 'Tehran', Turkey: 'Turkey',
+};
+
+const STARTER_QUESTIONS = [
+  'How many daily prayers are there?',
+  'When does Asr start and end?',
+  'When is Isha tomorrow?',
+  'Fajr in Makkah on 1 Ramadan 1448',
+];
+
+// sunnah.com slugs for the collections cited in assistant/faq.md
+const HADITH_SLUGS = { 'Bukhari': 'bukhari', 'Muslim': 'muslim', 'Abu Dawud': 'abudawud', 'Tirmidhi': 'tirmidhi' };
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// The small markdown subset faq.md uses: paragraphs, - and 1. lists, **bold**.
+function mdToHtml(md) {
+  const out = [];
+  let para = [], list = null;
+  const inline = t => t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map(i => `<li>${inline(i)}</li>`).join('')}</${list.tag}>`); list = null; } };
+  for (const line of escapeHtml(md).split('\n')) {
+    const ul = line.match(/^\s*-\s+(.*)$/), ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ul || ol) {
+      flushPara();
+      const tag = ul ? 'ul' : 'ol';
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      list.items.push((ul || ol)[1]);
+    } else if (!line.trim()) {
+      flushPara(); flushList();
+    } else {
+      flushList(); para.push(line.trim());
+    }
+  }
+  flushPara(); flushList();
+  return out.join('');
+}
+
+function sourcesHtml(sources) {
+  if (!sources) return '';
+  const parts = sources.split(';').map(x => x.trim()).filter(Boolean).map(ref => {
+    const m = ref.match(/^(Bukhari|Muslim|Abu Dawud|Tirmidhi) (\d+)$/);
+    return m ? `<a href="https://sunnah.com/${HADITH_SLUGS[m[1]]}:${m[2]}" target="_blank" rel="noopener">${escapeHtml(ref)}</a>`
+             : escapeHtml(ref);
+  });
+  return `<div class="msg-sources">Sources: ${parts.join('; ')}</div>`;
+}
+
+function chipsHtml(questions) {
+  return `<div class="chat-chips">${questions.map(q =>
+    `<button type="button" class="chat-chip" data-ask="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>`;
+}
+
+function htmlToText(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('.chat-chips, .msg-sources').forEach(el => el.remove());
+  doc.querySelectorAll('p, li, div').forEach(el => el.append('\n'));
+  return doc.body.textContent.replace(/\n{2,}/g, '\n').trim();
+}
 
 function adhanApp() {
   return {
@@ -38,6 +104,7 @@ function adhanApp() {
 
     // ── prayer times ─────────────────────────────────────────────────
     prayers:       PRAYER_NAMES.map(n => ({ name: n, time: '--:--' })),
+    extras:        [],      // voluntary prayer windows (Duha, Awwabin, Midnight, Tahajjud)
     nextPrayerName: '',
     prayerTimesObj: null,
     coordinates:   null,
@@ -62,16 +129,12 @@ function adhanApp() {
     chatLang:         'English',
     inputPlaceholder: PLACEHOLDERS.English,
     question:         '',
-    messages:         [],    // completed turns [{role, content}]
-    streamingContent: '',    // live content of the in-progress assistant reply
+    messages:         [],    // [{role, html, text}]
     chatLoading:      false,
+    lastTimes:        null,  // previous times reply, sent back so "and tomorrow?" works
+    starterChips:     chipsHtml(STARTER_QUESTIONS),
     recognizing:      false,
     _recognition:     null,
-    sessionId:        (crypto.randomUUID?.() ||
-                       'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-                         const r = Math.random() * 16 | 0;
-                         return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-                       })),
 
     // ── init ─────────────────────────────────────────────────────────
     init() {
@@ -161,6 +224,40 @@ function adhanApp() {
         time: pt[n.toLowerCase()].toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       }));
       this._scheduleNextAdhan(new Date());
+      this._refreshExtras(new Date());
+    },
+
+    // Voluntary prayer windows shown under the grid. The day follows the grid
+    // (it moves to tomorrow after Isha); the night is the one you're in, so
+    // between midnight and Fajr it is still last night.
+    _refreshExtras(now) {
+      if (!this.coordinates) return;
+      const params = this._getParams();
+      const at = offsetDays => {
+        const d = new Date(now);
+        d.setDate(d.getDate() + offsetDays);
+        return new adhan.PrayerTimes(this.coordinates, d, params);
+      };
+      const today = at(0);
+      const fmt = t => t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const range = (a, b) => `${fmt(a)} to ${fmt(b)}`;
+      const minutes = (t, m) => new Date(t.getTime() + m * 60_000);
+
+      const day = now > today.isha ? at(1) : today;
+      const nightStart = now < today.fajr ? at(-1) : today;
+      const night = new adhan.SunnahTimes(nightStart);
+      const nightEnd = now < today.fajr ? today.fajr : at(1).fajr;
+
+      this.extras = [
+        { name: 'Duha', time: range(minutes(day.sunrise, 20), minutes(day.dhuhr, -10)),
+          note: 'From about 20 minutes after sunrise until shortly before Dhuhr (zawal). Best once the day has become hot (Muslim 748).' },
+        { name: 'Awwabin', time: range(day.maghrib, day.isha),
+          note: "Voluntary prayer between Maghrib and Isha. In Muslim 748 the Prophet also called Duha \"the prayer of the awwabin\"." },
+        { name: 'Midnight', time: fmt(night.middleOfTheNight),
+          note: "Halfway between Maghrib and Fajr. Isha's preferred time ends here (Muslim 612)." },
+        { name: 'Tahajjud', time: range(night.lastThirdOfTheNight, nightEnd),
+          note: 'The last third of the night, the best time for night prayer (Bukhari 1145). Night prayer can be offered any time after Isha.' },
+      ];
     },
 
     // ── 1-second tick ────────────────────────────────────────────────
@@ -177,6 +274,7 @@ function adhanApp() {
       }).format(now);
 
       if (!this.prayerTimesObj || !this.coordinates) return;
+      if (now.getSeconds() === 0) this._refreshExtras(now);
 
       // Refresh prayer times at midnight
       const pt = this.prayerTimesObj;
@@ -286,69 +384,121 @@ function adhanApp() {
 
     // ── chat ─────────────────────────────────────────────────────────
     updatePlaceholder() {
-      this.inputPlaceholder = PLACEHOLDERS[this.chatLang] || PLACEHOLDERS.English;
+      this.inputPlaceholder = PLACEHOLDERS.English;
+    },
+
+    _pushAssistant(html) {
+      this.messages.push({ role: 'assistant', html, text: htmlToText(html) });
+    },
+
+    onChatClick(e) {
+      const chip = e.target.closest('[data-ask]');
+      if (!chip || this.chatLoading) return;
+      this.question = chip.dataset.ask;
+      this.askQuestion();
     },
 
     async askQuestion() {
       if (!this.question.trim() || this.chatLoading) return;
-      if (!this.ragReady) {
-        this.messages.push({ role: 'assistant', content: `Chat unavailable: ${this.ragError || 'RAG index not loaded.'}` });
-        return;
-      }
       const q = this.question.trim();
       this.question = '';
+      this.messages.push({ role: 'user', html: escapeHtml(q), text: q });
+      if (!this.ragReady) {
+        this._pushAssistant(`<p>Chat unavailable: ${escapeHtml(this.ragError || 'the assistant is not loaded.')}</p>`);
+        return;
+      }
       this.chatLoading = true;
-      this.streamingContent = '';
-
-      this.messages.push({ role: 'user', content: q });
-
-      const box = document.querySelector('.answer-box');
-
       try {
-        const url = `/api/chat?q=${encodeURIComponent(q)}&language=${encodeURIComponent(this.chatLang)}&session_id=${encodeURIComponent(this.sessionId)}`;
-        const resp = await fetch(url);
+        const params = new URLSearchParams({ q });
+        if (this.lastTimes) params.set('prev', JSON.stringify(this.lastTimes));
+        const resp = await fetch(`/api/chat?${params}`);
+        const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
-          const err = await resp.json().catch(() => ({}));
-          this.messages.push({ role: 'assistant', content: err.error || 'Server error.' });
+          this._pushAssistant(`<p>${escapeHtml(data.error || 'Server error.')}</p>`);
           return;
         }
-
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-
-          const lines = buf.split('\n');
-          buf = lines.pop();
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6).trim();
-            if (raw === '[DONE]') break;
-            try {
-              this.streamingContent += JSON.parse(raw);
-              if (box) box.scrollTop = box.scrollHeight;
-            } catch (_) {}
-          }
-        }
+        this._pushAssistant(this._renderReply(data));
       } catch (e) {
-        this.streamingContent = `Error: ${e.message}`;
+        this._pushAssistant(`<p>Error: ${escapeHtml(e.message)}</p>`);
       } finally {
-        // Commit the completed reply to messages, clear the stream buffer
-        this.messages.push({ role: 'assistant', content: this.streamingContent });
-        this.streamingContent = '';
         this.chatLoading = false;
-        if (box) box.scrollTop = box.scrollHeight;
+        this.$nextTick(() => {
+          const box = document.querySelector('.answer-box');
+          if (box) box.scrollTop = box.scrollHeight;
+        });
       }
     },
 
-    async newChat() {
-      await fetch(`/api/session/${this.sessionId}`, { method: 'DELETE' }).catch(() => {});
-      this.sessionId = crypto.randomUUID();
+    _renderReply(r) {
+      if (r.kind === 'times') {
+        this.lastTimes = { targets: r.targets, date: r.date, date_label: r.date_label, place: r.place };
+        return this._timesHtml(r);
+      }
+      if (r.kind === 'faq') {
+        const times = r.times ? `<div class="msg-times">${this._timesHtml(r.times)}</div>` : '';
+        return `<p><strong>${escapeHtml(r.title)}</strong></p>${mdToHtml(r.answer)}${times}${sourcesHtml(r.sources)}`;
+      }
+      if (r.kind === 'fallback') {
+        return `<p>${escapeHtml(r.text)}</p>${chipsHtml(r.suggestions || [])}`;
+      }
+      return `<p>${escapeHtml(r.text || 'Sorry, I could not answer that.')}</p>`;
+    },
+
+    // Prayer times for a chat reply, calculated exactly like the clock.
+    _timesHtml(spec) {
+      if (typeof adhan === 'undefined') return '<p>Prayer time library failed to load.</p>';
+      const coords = spec.place ? new adhan.Coordinates(spec.place.lat, spec.place.lng) : this.coordinates;
+      if (!coords) {
+        return '<p>I don\'t know your location yet. Allow location access, or ask with a city, for example "Asr in Toronto".</p>';
+      }
+      const tz = spec.place ? spec.place.tz : Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const [y, m, d] = spec.date.split('-').map(Number);
+      const params = this._getParams();
+      // adhan.js reads only the calendar date from these
+      const pt = new adhan.PrayerTimes(coords, new Date(y, m - 1, d), params);
+      const nextPt = new adhan.PrayerTimes(coords, new Date(y, m - 1, d + 1), params);
+      const night = new adhan.SunnahTimes(pt);
+      const fmt = t => t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz });
+
+      const isToday = !spec.place && spec.date === new Date().toLocaleDateString('en-CA');
+      const rel = t => {
+        if (!isToday) return '';
+        const mins = Math.round((t - new Date()) / 60000);
+        const span = Math.abs(mins) >= 60 ? `${Math.floor(Math.abs(mins) / 60)} h ${Math.abs(mins) % 60} min` : `${Math.abs(mins)} min`;
+        return mins >= 0 ? ` <span class="msg-rel">(in ${span})</span>` : ` <span class="msg-rel">(${span} ago)</span>`;
+      };
+      const rows = {
+        fajr:       () => `<strong>Fajr</strong>: ${fmt(pt.fajr)}${rel(pt.fajr)}, until sunrise at ${fmt(pt.sunrise)}`,
+        sunrise:    () => `<strong>Sunrise</strong>: ${fmt(pt.sunrise)}${rel(pt.sunrise)}`,
+        dhuhr:      () => `<strong>Dhuhr</strong>: ${fmt(pt.dhuhr)}${rel(pt.dhuhr)}, until Asr at ${fmt(pt.asr)}`,
+        asr:        () => `<strong>Asr</strong>: ${fmt(pt.asr)}${rel(pt.asr)}, until Maghrib (sunset) at ${fmt(pt.maghrib)}`,
+        maghrib:    () => `<strong>Maghrib</strong>: ${fmt(pt.maghrib)}${rel(pt.maghrib)}, until Isha at ${fmt(pt.isha)}`,
+        isha:       () => `<strong>Isha</strong>: ${fmt(pt.isha)}${rel(pt.isha)}, until Fajr at ${fmt(nextPt.fajr)} the next morning`,
+        midnight:   () => `<strong>Middle of the night</strong>: ${fmt(night.middleOfTheNight)}${rel(night.middleOfTheNight)}`,
+        last_third: () => `<strong>Last third of the night</strong>: from ${fmt(night.lastThirdOfTheNight)}${rel(night.lastThirdOfTheNight)} until Fajr at ${fmt(nextPt.fajr)}`,
+      };
+      const all = ['fajr', 'sunrise', 'dhuhr', 'asr', 'maghrib', 'isha'];
+      const targets = spec.targets.includes('all') ? all : spec.targets.filter(t => rows[t]);
+      const lines = targets.map(t => `<li>${rows[t]()}</li>`).join('');
+
+      const dateText = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+      let label = (spec.date_label || '').trim();
+      // Midnight and the last third belong to the coming night.
+      if (label === 'today' && spec.targets.every(t => t === 'midnight' || t === 'last_third')) label = 'tonight';
+      const head = ['today', 'tonight', 'tomorrow', 'yesterday'].includes(label.toLowerCase())
+        ? `${label.charAt(0).toUpperCase()}${label.slice(1)}, ${dateText}`
+        : (label && label.includes('AH') ? `${label} (${dateText})` : dateText);
+      const where = spec.place ? spec.place.name : (this.locationInfo || 'your location');
+      const notes = (spec.notes || []).map(n => `<div class="msg-note">${escapeHtml(n)}</div>`).join('');
+      const method = METHOD_LABELS[this.settings.method] || this.settings.method;
+      const tzNote = spec.place ? ` Times are local to ${escapeHtml(spec.place.name)} (${escapeHtml(tz)}).` : '';
+      return `<p><strong>${escapeHtml(head)}</strong> in ${escapeHtml(where)}</p><ul class="msg-time-list">${lines}</ul>${notes}`
+           + `<div class="msg-note">Calculated with your settings: ${escapeHtml(method)}, Fajr ${escapeHtml(this.settings.fajrAngle)}°, Isha ${escapeHtml(this.settings.ishaAngle)}°.${tzNote}</div>`;
+    },
+
+    newChat() {
       this.messages = [];
+      this.lastTimes = null;
     },
 
     // ── voice input (Web Speech API) ─────────────────────────────────
@@ -386,9 +536,9 @@ function adhanApp() {
     // ── TTS (Web Speech API) ─────────────────────────────────────────
     speakAnswer() {
       const last = [...this.messages].reverse().find(m => m.role === 'assistant');
-      if (!last?.content || !window.speechSynthesis) return;
+      if (!last?.text || !window.speechSynthesis) return;
       speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(last.content);
+      const utt = new SpeechSynthesisUtterance(last.text);
       utt.lang = LANG_SPEECH[this.chatLang] || 'en-US';
       speechSynthesis.speak(utt);
     },

@@ -65,13 +65,21 @@
     .greg-date  { color: #fff; font-size: .85rem; }
     .big-clock  { font-size: 3rem; font-weight: 700; letter-spacing: .04em; line-height: 1.15; color: #fff; }
     .location   { color: #fff; font-size: .85rem; margin-top: .2rem; }
-    .countdown  { font-size: 3rem; font-weight: 700; color: var(--blue); line-height: 1.15; white-space: nowrap; }
+    .countdown  { font-size: clamp(1.5rem, 7.5vw, 3rem); font-weight: 700; color: var(--blue); line-height: 1.15; white-space: nowrap; }
     .prayer-divider { border-top: 1px solid var(--border); margin: .4rem 0; }
 
     /* ── prayer grid ── */
     .prayer-cell { text-align: center; padding: .5rem .2rem; }
     .prayer-name { font-size: .75rem; color: #fff; text-transform: uppercase; letter-spacing: .06em; margin-bottom: .15rem; }
     .prayer-time { font-size: 1.1rem; font-weight: 600; color: #fff; }
+    @media (min-width: 768px) {
+      .countdown { font-size: clamp(1.5rem, 2.8vw, 3rem); }
+    }
+    .extras-divider { display: flex; align-items: center; gap: .6rem; margin: .4rem .6rem; font-size: .65rem;
+                      text-transform: uppercase; letter-spacing: .1em; color: rgba(255,255,255,.55); }
+    .extras-divider::before, .extras-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
+    .extra-cell { cursor: help; }
+    .extra-time { font-size: .95rem; font-weight: 600; color: rgba(255,255,255,.85); }
     .prayer-cell.next .prayer-name,
     .prayer-cell.next .prayer-time { color: var(--blue); }
 
@@ -92,8 +100,22 @@
       .answer-box { flex: 1; max-height: none; }  /* desktop: fills card via flex */
     }
     .answer-placeholder { color: rgba(255,255,255,.35); font-style: italic; }
-    .msg-user      { color: var(--gold); margin-bottom: .35rem; white-space: pre-wrap; }
-    .msg-assistant { color: #fff; margin-bottom: .9rem; padding-bottom: .75rem; border-bottom: 1px solid rgba(255,255,255,.08); white-space: pre-wrap; }
+    .msg-user      { color: var(--gold); margin-bottom: .35rem; }
+    .msg-user > div { white-space: pre-wrap; }
+    .msg-assistant { color: #fff; margin-bottom: .9rem; padding-bottom: .75rem; border-bottom: 1px solid rgba(255,255,255,.08); }
+    .msg-assistant p { margin: 0 0 .5rem; }
+    .msg-assistant ul, .msg-assistant ol { margin: 0 0 .5rem; padding-left: 1.2rem; }
+    .msg-assistant li { margin-bottom: .2rem; }
+    .msg-time-list { list-style: none; padding-left: 0 !important; }
+    .msg-times { border-left: 3px solid var(--blue); padding-left: .6rem; margin: .5rem 0; }
+    .msg-note, .msg-sources, .msg-rel { font-size: .78rem; opacity: .7; }
+    .msg-note { margin-top: .25rem; }
+    .msg-sources { margin-top: .4rem; }
+    .msg-sources a { color: var(--gold); }
+    .chat-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .4rem; }
+    .chat-chip { background: transparent; border: 1px solid var(--border); color: #fff; border-radius: 1rem;
+                 font-size: .78rem; padding: .2rem .7rem; cursor: pointer; text-align: left; }
+    .chat-chip:hover { border-color: var(--blue); color: var(--blue); }
     .msg-assistant:last-child { border-bottom: none; margin-bottom: 0; }
     .msg-label     { font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; opacity: .55; display: block; margin-bottom: .2rem; }
 
@@ -184,7 +206,7 @@
   <div class="row g-3 align-items-stretch main-row">
 
     <!-- LEFT: clock + prayer grid -->
-    <div class="col-md-5 left-col gap-3">
+    <div class="col-md-6 left-col gap-3">
 
       <div class="card" style="flex-shrink:0">
         <div class="card-body py-3 text-center">
@@ -198,12 +220,22 @@
       </div>
 
       <div class="card" style="flex:1;min-height:0">
-        <div class="card-body d-flex flex-column py-2 px-2" style="min-height:0">
-          <div class="row row-cols-3 g-0 flex-grow-1 align-content-center">
+        <div class="card-body d-flex flex-column justify-content-center gap-2 py-2 px-2" style="min-height:0">
+          <div class="row row-cols-3 g-0 align-content-center">
             <template x-for="p in prayers" :key="p.name">
               <div class="col prayer-cell" :class="{ next: p.name === nextPrayerName }">
                 <div class="prayer-name" x-text="p.name"></div>
                 <div class="prayer-time" x-text="p.time"></div>
+              </div>
+            </template>
+          </div>
+          <!-- Voluntary prayer times: same calculation as above, no adhan -->
+          <div class="extras-divider"><span>Voluntary</span></div>
+          <div class="row row-cols-2 g-0 align-content-center">
+            <template x-for="x in extras" :key="x.name">
+              <div class="col prayer-cell extra-cell" :title="x.note">
+                <div class="prayer-name" x-text="x.name"></div>
+                <div class="extra-time" x-text="x.time"></div>
               </div>
             </template>
           </div>
@@ -213,13 +245,13 @@
     </div><!-- /left -->
 
     <!-- RIGHT: chat -->
-    <div class="col-md-7 right-col">
+    <div class="col-md-6 right-col">
       <div class="card card-chat d-flex flex-column" style="flex:1;min-height:0">
 
         <div class="card-header py-2 px-3">
           <div class="fw-semibold" style="font-size:1rem">Ask a Question</div>
           <div style="font-size:.8rem;margin-top:.15rem">
-            Prayer times for any city &middot; Islamic practices &middot; App help &middot; Answers in your chosen language
+            Prayer times for any date or city &middot; Basics of salah &middot; Hijri dates
           </div>
         </div>
 
@@ -236,11 +268,12 @@
               <option>Turkish</option>
               <option>Arabic</option>
             </select>
+            <span x-show="chatLang !== 'English'" style="font-size:.75rem;opacity:.7">Answers are in English for now.</span>
             <div class="ms-auto d-flex align-items-center gap-1">
-              <span style="font-size:.8rem">RAG</span>
+              <span style="font-size:.8rem">Assistant</span>
               <span class="badge rounded-pill"
                     :class="ragReady ? 'bg-success' : 'bg-secondary'"
-                    :title="ragError || 'Claude RAG ready'"
+                    :title="ragError || 'Assistant ready'"
                     x-text="ragReady ? 'Ready' : 'Offline'"></span>
             </div>
           </div>
@@ -280,18 +313,20 @@
           </div>
 
           <!-- Conversation thread — fills remaining height -->
-          <div class="answer-box">
-            <span x-show="messages.length === 0 && !chatLoading" class="answer-placeholder">Answer will appear here…</span>
+          <div class="answer-box" @click="onChatClick($event)">
+            <div x-show="messages.length === 0 && !chatLoading">
+              <span class="answer-placeholder">Ask about prayer times for any date or city, or the basics of salah. Try:</span>
+              <div x-html="starterChips"></div>
+            </div>
             <template x-for="(msg, i) in messages" :key="i">
               <div :class="'msg-' + msg.role">
                 <span class="msg-label" x-text="msg.role === 'user' ? 'You' : 'Assistant'"></span>
-                <span x-text="msg.content"></span>
+                <div x-html="msg.html"></div>
               </div>
             </template>
-            <!-- Live streaming bubble -->
             <div x-show="chatLoading" class="msg-assistant">
               <span class="msg-label">Assistant</span>
-              <span x-text="streamingContent || '…'"></span>
+              <span>…</span>
             </div>
           </div>
 
