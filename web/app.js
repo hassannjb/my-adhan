@@ -43,6 +43,16 @@ const STARTER_QUESTIONS = [
 // sunnah.com slugs for the collections cited in assistant/faq.md
 const HADITH_SLUGS = { 'Bukhari': 'bukhari', 'Muslim': 'muslim', 'Abu Dawud': 'abudawud', 'Tirmidhi': 'tirmidhi' };
 
+// Anonymous id per browser tab for the question log (no IP or user agent is stored).
+const SESSION_ID = (() => {
+  const make = () => (crypto.randomUUID?.() || (Date.now().toString(36) + Math.random().toString(36).slice(2)));
+  try {
+    let s = sessionStorage.getItem('adhan_session');
+    if (!s) { s = make(); sessionStorage.setItem('adhan_session', s); }
+    return s;
+  } catch (_) { return make(); }
+})();
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -411,7 +421,7 @@ function adhanApp() {
       try {
         const params = new URLSearchParams({ q });
         if (this.lastTimes) params.set('prev', JSON.stringify(this.lastTimes));
-        const resp = await fetch(`/api/chat?${params}`);
+        const resp = await fetch(`/api/chat?${params}`, { headers: { 'X-Session': SESSION_ID } });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) {
           this._pushAssistant(`<p>${escapeHtml(data.error || 'Server error.')}</p>`);

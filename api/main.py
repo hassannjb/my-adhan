@@ -16,10 +16,11 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -90,6 +91,7 @@ def status():
 # Plain `def` so FastAPI runs it in a thread: city lookups block on HTTP.
 @app.get("/api/chat")
 def chat(
+    request:  Request,
     q:        str = Query(...,       description="User question", max_length=500),
     prev:     str = Query("",        description="JSON of the previous times reply, for follow-ups"),
     language: str = Query("English", description="Ignored for now: answers are English only"),
@@ -104,11 +106,19 @@ def chat(
                 prev_obj = None
         except ValueError:
             prev_obj = None
+    from assistant import querylog
+    started, t0 = querylog.now(), time.perf_counter()
+    reply, error = None, None
     try:
-        return _state["assistant"].answer(q, prev=prev_obj)
-    except Exception:
+        reply = _state["assistant"].answer(q, prev=prev_obj)
+    except Exception as e:
         logger.exception("chat failed for %r", q)
-        return {"kind": "error", "text": "Something went wrong answering that. Please try rephrasing."}
+        error = f"{type(e).__name__}: {e}"
+        reply = {"kind": "error", "text": "Something went wrong answering that. Please try rephrasing."}
+    querylog.record(started=started, query=q, reply=reply, headers=request.headers,
+                    followup=prev_obj is not None, latency_ms=(time.perf_counter() - t0) * 1000,
+                    error=error)
+    return reply
 
 
 @app.delete("/api/session/{session_id}")
