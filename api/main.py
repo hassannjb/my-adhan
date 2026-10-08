@@ -62,6 +62,18 @@ app.add_middleware(
 )
 
 
+# Cloudflare sits in front and caches .js for hours by default, which kept
+# serving a stale app.js after a deploy. Make browsers and the edge recheck
+# page assets every time (a 304 when unchanged); audio stays cacheable.
+@app.middleware("http")
+async def _revalidate_page_assets(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".html", ".js", ".css", ".json")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
