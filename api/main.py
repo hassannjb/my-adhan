@@ -75,6 +75,11 @@ async def _revalidate_page_assets(request, call_next):
     return response
 
 
+from assistant import ratelimit  # noqa: E402
+
+_chat_limit = ratelimit.from_env()
+
+
 # ── API routes ────────────────────────────────────────────────────────────────
 
 @app.get("/api/status")
@@ -93,9 +98,17 @@ def status():
 def chat(
     request:  Request,
     q:        str = Query(...,       description="User question", max_length=500),
-    prev:     str = Query("",        description="JSON of the previous times reply, for follow-ups"),
+    prev:     str = Query("",        description="JSON of the previous times reply, for follow-ups",
+                          max_length=4000),
     language: str = Query("English", description="Ignored for now: answers are English only"),
 ):
+    if _chat_limit is not None:
+        wait = _chat_limit.hit(ratelimit.client_key(request.headers,
+                                                    request.client.host if request.client else None))
+        if wait:
+            return JSONResponse(
+                {"error": f"That's a lot of questions at once. Try again in {wait} seconds."},
+                status_code=429, headers={"Retry-After": str(wait)})
     if not _state.get("ready"):
         return JSONResponse({"error": _state.get("error", "Assistant not loaded.")}, status_code=503)
     prev_obj = None

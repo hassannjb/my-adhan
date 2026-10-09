@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from functools import lru_cache
 
 import requests
@@ -17,6 +19,10 @@ logger = logging.getLogger(__name__)
 _NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _HEADERS = {"User-Agent": "adhan-clock/1.0 (https://adhan.searchthehadith.fyi)"}
 _tf = TimezoneFinder()
+# Nominatim's usage policy: at most one request per second from the whole app.
+_MIN_GAP = 1.0
+_gap_lock = threading.Lock()
+_last_call = 0.0
 
 _PLACE_RE = re.compile(r"\b(?:in|for|at|near)\s+([^\W\d][\w .'\-]*?)\s*(?:[?.!,;]|$)", re.UNICODE)
 _TRAILING = re.compile(
@@ -55,7 +61,11 @@ def extract_place(text: str) -> str | None:
 @lru_cache(maxsize=512)
 def geocode(name: str) -> dict | None:
     """Resolve a place name to {name, lat, lng, tz}, or None if not found."""
+    global _last_call
     try:
+        with _gap_lock:
+            time.sleep(max(0.0, _last_call + _MIN_GAP - time.monotonic()))
+            _last_call = time.monotonic()
         r = requests.get(
             _NOMINATIM_URL,
             params={"q": name, "format": "json", "limit": 1, "addressdetails": 1,
