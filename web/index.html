@@ -79,6 +79,13 @@
                       text-transform: uppercase; letter-spacing: .1em; color: rgba(255,255,255,.55); }
     .extras-divider::before, .extras-divider::after { content: ''; flex: 1; border-top: 1px solid var(--border); }
     .extra-cell { cursor: help; }
+    .extra-cell sup { font-size: .6rem; margin-left: .1rem; color: var(--gold); }
+    .extras-notes { font-size: .72rem; line-height: 1.4; color: rgba(255,255,255,.65); margin: .3rem .6rem 0;
+                    padding-left: 1.1rem; }
+    .extras-notes li { margin-bottom: .25rem; }
+    .extras-notes li::marker { color: var(--gold); }
+    .extras-notes .extras-notes-all { list-style: none; margin-left: -1.1rem; opacity: .8; }
+    .extras-notes a { color: var(--gold); }
     .extra-time { font-size: .95rem; font-weight: 600; color: rgba(255,255,255,.85); }
     .prayer-cell.next .prayer-name,
     .prayer-cell.next .prayer-time { color: var(--blue); }
@@ -232,13 +239,19 @@
           <!-- Voluntary prayer times: same calculation as above, no adhan -->
           <div class="extras-divider"><span>Voluntary</span></div>
           <div class="row row-cols-2 g-0 align-content-center">
-            <template x-for="x in extras" :key="x.name">
+            <template x-for="(x, i) in extras" :key="x.name">
               <div class="col prayer-cell extra-cell" :title="x.note">
-                <div class="prayer-name" x-text="x.name"></div>
+                <div class="prayer-name"><span x-text="x.name"></span><sup x-text="i + 1"></sup></div>
                 <div class="extra-time" x-text="x.time"></div>
               </div>
             </template>
           </div>
+          <ol class="extras-notes" x-show="extras.length">
+            <template x-for="x in extras" :key="x.name">
+              <li><strong x-text="x.name"></strong>: <span x-html="linkRefs(x.note)"></span></li>
+            </template>
+            <li class="extras-notes-all">All times follow the calculation method in Settings.</li>
+          </ol>
         </div>
       </div>
 
@@ -340,6 +353,6 @@
 
 <audio id="makkahAudio" src="/audio/makkah_adhan.mp3" preload="auto"></audio>
 <audio id="fajrAudio"   src="/audio/fajr.mp3?v=2"         preload="auto"></audio>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

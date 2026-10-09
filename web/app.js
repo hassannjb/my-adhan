@@ -91,6 +91,11 @@ function sourcesHtml(sources) {
   return `<div class="msg-sources">Sources: ${parts.join('; ')}</div>`;
 }
 
+function linkRefs(text) {
+  return escapeHtml(text).replace(/\b(Bukhari|Muslim|Abu Dawud|Tirmidhi) (\d+)\b/g,
+    (m, book, n) => `<a href="https://sunnah.com/${HADITH_SLUGS[book]}:${n}" target="_blank" rel="noopener">${m}</a>`);
+}
+
 function chipsHtml(questions) {
   return `<div class="chat-chips">${questions.map(q =>
     `<button type="button" class="chat-chip" data-ask="${escapeHtml(q)}">${escapeHtml(q)}</button>`).join('')}</div>`;
@@ -260,13 +265,20 @@ function adhanApp() {
 
       this.extras = [
         { name: 'Duha', time: range(minutes(day.sunrise, 20), minutes(day.dhuhr, -10)),
-          note: 'From about 20 minutes after sunrise until shortly before Dhuhr (zawal). Best once the day has become hot (Muslim 748).' },
+          note: 'Starts about 20 minutes after sunrise, once the sun is a spear\'s length up and the '
+              + 'forbidden time at sunrise has passed, and ends about 10 minutes before Dhuhr, before the '
+              + 'sun reaches its zenith. It is best once the day has become hot (Muslim 748).' },
         { name: 'Awwabin', time: range(day.maghrib, day.isha),
-          note: "Voluntary prayer between Maghrib and Isha. In Muslim 748 the Prophet also called Duha \"the prayer of the awwabin\"." },
+          note: 'Shown as the time between Maghrib and Isha, for the six rak\'ahs after Maghrib '
+              + '(Tirmidhi 435, graded weak). In an authentic hadith the Prophet called Duha '
+              + '"the prayer of the awwabin" (Muslim 748).' },
         { name: 'Midnight', time: fmt(night.middleOfTheNight),
-          note: "Halfway between Maghrib and Fajr. Isha's preferred time ends here (Muslim 612)." },
+          note: 'Halfway between Maghrib and Fajr. Isha\'s preferred time ends here, "until half of the '
+              + 'night" (Muslim 612), though Isha stays valid until dawn.' },
         { name: 'Tahajjud', time: range(night.lastThirdOfTheNight, nightEnd),
-          note: 'The last third of the night, the best time for night prayer (Bukhari 1145). Night prayer can be offered any time after Isha.' },
+          note: 'Night prayer can be offered any time after Isha until true dawn. The time shown is the '
+              + 'last third of the night, its preferred time, when the Lord descends to the nearest heaven '
+              + 'and answers those who call on Him (Bukhari 1145).' },
       ];
     },
 
