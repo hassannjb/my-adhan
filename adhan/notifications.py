@@ -64,3 +64,12 @@ def set_adhan_volume(level: float) -> None:
             pygame.mixer.music.set_volume(max(0.0, min(1.0, level)))
     except Exception as e:
         logger.warning("Failed to set volume: %s", e)
+
+
+def is_adhan_playing() -> bool:
+    """True while the mixer is playing a track (adhan or manual play)."""
+    try:
+        import pygame
+        return bool(pygame.mixer.get_init() and pygame.mixer.music.get_busy())
+    except Exception:
+        return False

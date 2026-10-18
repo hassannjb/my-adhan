@@ -26,6 +26,7 @@ class _W:
     def setToolTip(self, *a): pass
     def width(self): return 450
     def resizeEvent(self, e): pass
+    def eventFilter(self, obj, event): return False
 
 
 class _Label(_W):
@@ -63,6 +64,9 @@ class _GroupBox(_W):
 
 class _Button(_W):
     clicked = MagicMock()
+    def __init__(self, *a, **kw): self._enabled = True
+    def setEnabled(self, on): self._enabled = on
+    def isEnabled(self): return self._enabled
 
 
 class _LineEdit(_W):
@@ -108,6 +112,20 @@ class _Qt:
     AlignTop = 20
     ScrollBarAlwaysOff = 1
     ScrollBarAsNeeded = 0
+    Key_Space = 0x20
+    Key_A = 0x41
+    Key_Return = 0x01000004
+    Key_Shift = 0x01000020
+    Key_Control = 0x01000021
+    Key_Meta = 0x01000022
+    Key_Alt = 0x01000023
+    Key_AltGr = 0x01001103
+    Key_CapsLock = 0x01000024
+
+
+class _QEvent:
+    KeyPress = 6
+    KeyRelease = 7
 
 
 class _Thread:
@@ -138,6 +156,7 @@ _widgets_mod.QApplication = MagicMock()
 _core_mod = MagicMock()
 _core_mod.QTimer = _Timer
 _core_mod.Qt = _Qt
+_core_mod.QEvent = _QEvent
 _core_mod.QThread = _Thread
 _core_mod.pyqtSignal = _pyqtSignal
 
@@ -289,3 +308,76 @@ def test_resize_event_applies_correct_font_sizes(widget):
     expected_date_size = max(16, width // 25)
     assert f"font-size: {expected_time_size}px" in widget.time_label._style
     assert f"font-size: {expected_date_size}px" in widget.date_label._style
+
+
+# ── any key suppresses a playing adhan ────────────────────────────────────────
+
+class _KeyEvent:
+    def __init__(self, etype, key, auto_repeat=False):
+        self._type, self._key, self._repeat = etype, key, auto_repeat
+    def type(self): return self._type
+    def key(self): return self._key
+    def isAutoRepeat(self): return self._repeat
+
+
+def _press(key, auto_repeat=False):
+    return _KeyEvent(_QEvent.KeyPress, key, auto_repeat)
+
+
+def _release(key, auto_repeat=False):
+    return _KeyEvent(_QEvent.KeyRelease, key, auto_repeat)
+
+
+@pytest.fixture
+def playing(widget, monkeypatch):
+    """Widget with an adhan playing; the end-watcher thread is not started."""
+    widget.clock.is_adhan_playing.return_value = True
+    monkeypatch.setattr("gui.clock_window.threading.Thread", MagicMock())
+    return widget
+
+
+@pytest.mark.parametrize("key", [_Qt.Key_Space, _Qt.Key_Return, _Qt.Key_A])
+def test_key_press_while_playing_suppresses_and_is_swallowed(playing, key):
+    assert playing.eventFilter(None, _press(key)) is True
+    playing.clock.set_volume.assert_called_once_with(0.05)
+    assert not playing.suppress_btn.isEnabled()
+
+
+def test_key_press_when_nothing_playing_passes_through(widget):
+    widget.clock.is_adhan_playing.return_value = False
+    assert widget.eventFilter(None, _press(_Qt.Key_Space)) is False
+    widget.clock.set_volume.assert_not_called()
+    assert widget.suppress_btn.isEnabled()
+
+
+def test_key_press_after_suppress_passes_through(playing):
+    playing.eventFilter(None, _press(_Qt.Key_A))
+    playing.eventFilter(None, _release(_Qt.Key_A))
+    playing.clock.set_volume.reset_mock()
+    assert playing.eventFilter(None, _press(_Qt.Key_Space)) is False
+    playing.clock.set_volume.assert_not_called()
+
+
+def test_bare_modifier_does_not_suppress(playing):
+    assert playing.eventFilter(None, _press(_Qt.Key_Shift)) is False
+    playing.clock.set_volume.assert_not_called()
+
+
+def test_auto_repeat_alone_does_not_suppress(playing):
+    assert playing.eventFilter(None, _press(_Qt.Key_A, auto_repeat=True)) is False
+    playing.clock.set_volume.assert_not_called()
+
+
+def test_repeats_and_release_of_suppressing_key_are_swallowed(playing):
+    playing.eventFilter(None, _press(_Qt.Key_Space))
+    assert playing.eventFilter(None, _press(_Qt.Key_Space, auto_repeat=True)) is True
+    assert playing.eventFilter(None, _release(_Qt.Key_Space)) is True
+    # Gesture over: the next space reaches the focused widget again
+    assert playing.eventFilter(None, _press(_Qt.Key_Space)) is False
+
+
+def test_non_key_events_pass_through(playing):
+    event = MagicMock()
+    event.type.return_value = 12   # QEvent.Paint
+    assert playing.eventFilter(None, event) is False
+    playing.clock.set_volume.assert_not_called()

@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QGridLayout, QGroupBox, QPushButton,
                              QSizePolicy, QLineEdit, QTextEdit, QScrollArea,
                              QMenu, QComboBox)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, QThread, pyqtSignal
 
 from adhan import PrayerClock
 from adhan.config import save_config
@@ -23,6 +23,13 @@ from gui.settings import SettingsDialog
 from utils.display_helper import format_date_display, format_countdown
 
 _ADHAN_TRIGGER_WINDOW = 30   # seconds after prayer time to auto-play adhan
+
+# A modifier on its own doesn't count as "any key": Cmd-Tab to another app
+# shouldn't silence the adhan. Cmd+Q, Shift+A etc. still count via the main key.
+_MODIFIER_KEYS = frozenset({
+    Qt.Key_Shift, Qt.Key_Control, Qt.Key_Meta, Qt.Key_Alt, Qt.Key_AltGr,
+    Qt.Key_CapsLock,
+})
 
 _BTN_STYLE = (
     "padding: 5px 10px; border-radius: 4px; font-size: 12px; color: white;"
@@ -101,8 +108,13 @@ class AdhanClockUI(QWidget):
         self._record_worker     = None   # RecordWorker when mic is active
         self._transcribe_worker = None   # TranscribeWorker keeping thread alive
         self._tts_worker        = None   # TtsWorker when speaking
+        self._swallowed_key     = None   # key whose press triggered suppress
 
         self._build_ui()
+        # App-wide so the key is seen before the focused widget gets it
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         self._setup_timer()
         self.refresh_location()
         self._init_rag()
@@ -396,18 +408,43 @@ class AdhanClockUI(QWidget):
     def _watch_adhan_end(self) -> None:
         """Background thread: wait for playback to stop, then signal the main thread."""
         import time
-        try:
-            import pygame
-            while pygame.mixer.get_init() and pygame.mixer.music.get_busy():
-                time.sleep(0.5)
-        except Exception:
-            pass
+        while self.clock.is_adhan_playing():
+            time.sleep(0.5)
         self._adhan_ended.emit()
 
     def _on_adhan_ended(self) -> None:
         """Called on the main thread when the watcher detects playback has stopped."""
         self.clock.set_volume(VOLUME_NORMAL)
         self.suppress_btn.setEnabled(True)
+
+    def eventFilter(self, obj, event) -> bool:
+        """
+        Any key pressed while an adhan plays does what the Suppress button does.
+
+        The key is swallowed so it never reaches the focused widget (space on a
+        focused Stop button would otherwise stop the adhan). Its auto-repeats
+        and release are swallowed too, or a held space would still click it.
+        Once suppressed (button disabled) or when nothing plays, keys pass through.
+        """
+        etype = event.type()
+        if etype not in (QEvent.KeyPress, QEvent.KeyRelease):
+            return super().eventFilter(obj, event)
+
+        if self._swallowed_key is not None and event.key() == self._swallowed_key:
+            if etype == QEvent.KeyRelease and not event.isAutoRepeat():
+                self._swallowed_key = None
+            return True
+
+        if (etype == QEvent.KeyPress
+                and not event.isAutoRepeat()
+                and event.key() not in _MODIFIER_KEYS
+                and self.suppress_btn.isEnabled()
+                and self.clock.is_adhan_playing()):
+            self._swallowed_key = event.key()
+            self._suppress_current()
+            return True
+
+        return super().eventFilter(obj, event)
 
     def _open_settings_menu(self) -> None:
         menu = QMenu(self)

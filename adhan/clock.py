@@ -20,6 +20,7 @@ from adhan.notifications import (
     play_adhan as _play_adhan,
     stop_adhan as _stop_adhan,
     set_adhan_volume as _set_adhan_volume,
+    is_adhan_playing as _is_adhan_playing,
     send_notification,
     VOLUME_NORMAL,
     VOLUME_SUPPRESSED,
@@ -92,3 +93,6 @@ class PrayerClock:
 
     def set_volume(self, level: float) -> None:
         _set_adhan_volume(level)
+
+    def is_adhan_playing(self) -> bool:
+        return _is_adhan_playing()
