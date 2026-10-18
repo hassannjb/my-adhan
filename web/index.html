@@ -181,7 +181,7 @@
 
     <div class="ms-auto d-flex align-items-center gap-2">
     <div class="position-relative" x-show="account.enabled" x-cloak>
-      <a class="btn-account" x-show="!account.user" :href="signInUrl()">Sign in</a>
+      <a class="btn-account" x-show="!account.user" :href="signInUrl()">Sign in / Sign up</a>
       <template x-if="account.user">
         <div>
           <button class="btn-account" @click="showAccount = !showAccount"
