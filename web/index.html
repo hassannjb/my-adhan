@@ -237,10 +237,16 @@
           </div>
         </div>
         <label class="form-label small">Adhan Sound</label>
-        <select class="form-select form-select-sm" x-model="settings.audioFile">
+        <select class="form-select form-select-sm" x-model="settings.audioFile" @change="saveSettings()">
           <option value="makkah">Makkah Adhan</option>
           <option value="fajr">Fajr Special</option>
         </select>
+        <div class="mt-3" style="font-size:.75rem;opacity:.65" x-show="prefsSync" x-cloak>
+          Saved to your account, so they follow you to other devices.
+        </div>
+        <div class="mt-3" style="font-size:.75rem;opacity:.65" x-show="account.enabled && !account.user" x-cloak>
+          Saved in this browser. <a :href="signInUrl()" style="color:inherit">Sign in</a> to keep them on all your devices.
+        </div>
       </div>
     </div>
     </div>
@@ -394,6 +400,6 @@
 
 <audio id="makkahAudio" src="/audio/makkah_adhan.mp3" preload="auto"></audio>
 <audio id="fajrAudio"   src="/audio/fajr.mp3?v=2"         preload="auto"></audio>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>

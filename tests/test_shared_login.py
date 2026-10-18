@@ -80,4 +80,4 @@ def test_page_has_sign_in_and_fresh_app_js():
     from pathlib import Path
     html = (Path(__file__).parent.parent / "web" / "index.html").read_text()
     assert "signInUrl()" in html and "/auth/logout" in html
-    assert 'src="app.js?v=5"' in html
+    assert 'src="app.js?v=6"' in html

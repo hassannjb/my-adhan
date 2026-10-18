@@ -9,6 +9,9 @@
  * Chat assistant            : GET /api/chat  (JSON; curated answers, no LLM).
  * Sign-in (optional)        : GET /api/me reads the searchthehadith.fyi cookie;
  *                             signing in and out happens on that site.
+ * Settings sync (signed in) : GET/PUT /api/prefs; localStorage stays the copy
+ *                             the page runs from, the server copy follows the
+ *                             user to other devices.
  *                             Prayer times in chat are calculated here with the
  *                             same _getParams() as the clock, so they always agree.
  */
@@ -41,6 +44,12 @@ const STARTER_QUESTIONS = [
   'When is Isha tomorrow?',
   'Fajr in Makkah on 1 Ramadan 1448',
 ];
+
+// Settings that follow a signed-in user between devices (api/prefs.py ALLOWED).
+// The IP location cache and the per-tab session id belong to this browser and stay here.
+const SYNCED_KEYS = ['method', 'fajrAngle', 'ishaAngle', 'audioFile'];
+// Set to the uid while a local change has not reached the server yet.
+const PENDING_KEY = 'adhan_prefs_pending';
 
 // sunnah.com slugs for the collections cited in assistant/faq.md
 const HADITH_SLUGS = { 'Bukhari': 'bukhari', 'Muslim': 'muslim', 'Abu Dawud': 'abudawud', 'Tirmidhi': 'tirmidhi' };
@@ -156,6 +165,9 @@ function adhanApp() {
     // ── account ──────────────────────────────────────────────────────
     account:     { enabled: false, user: null, authBase: '' },
     showAccount: false,
+    prefsSync:   false,   // true once the server copy of the settings is in use
+    _pushTimer:  null,
+    _pushSeq:    0,
 
     // ── init ─────────────────────────────────────────────────────────
     init() {
@@ -164,6 +176,15 @@ function adhanApp() {
       setInterval(() => this.tick(), 1000);
       this.checkRagStatus();
       this.loadAccount();
+      window.addEventListener('online', () => {
+        if (!this.account.user) return;
+        if (!this.prefsSync) this.syncPrefs();
+        else if (this._pendingUid() === String(this.account.user.id)) this._pushPrefs();
+      });
+      // A change still waiting out the debounce is sent as the tab goes away.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden' && this._pushTimer) this._pushPrefs(true);
+      });
     },
 
     // ── account (optional; pages live on searchthehadith.fyi) ────────
@@ -172,6 +193,7 @@ function adhanApp() {
         const d = await fetch('/api/me', { credentials: 'same-origin' }).then(r => r.json());
         this.account = { enabled: !!d.enabled, user: d.user || null, authBase: d.auth_base || '' };
       } catch (_) { /* no sign-in then; the clock works without it */ }
+      if (this.account.user) this.syncPrefs();
     },
     returnHere() { return location.href; },
     signInUrl() {
@@ -183,11 +205,82 @@ function adhanApp() {
 
     // ── settings persistence ─────────────────────────────────────────
     loadSettings() {
-      const s = localStorage.getItem('adhan_settings');
-      if (s) Object.assign(this.settings, JSON.parse(s));
+      try {
+        const s = localStorage.getItem('adhan_settings');
+        if (s) Object.assign(this.settings, JSON.parse(s));
+      } catch (_) { /* unreadable: keep the defaults */ }
     },
-    saveSettings() {
-      localStorage.setItem('adhan_settings', JSON.stringify(this.settings));
+    saveSettings(push = true) {
+      try { localStorage.setItem('adhan_settings', JSON.stringify(this.settings)); } catch (_) {}
+      if (push) this._queuePrefsPush();
+    },
+
+    // ── settings sync (signed in only) ───────────────────────────────
+    // On load the server copy wins, unless this browser has a change that
+    // never reached the server (made offline, or before the fetch returned);
+    // then, and when the server has nothing yet, the local settings are
+    // uploaded. After that every change is saved locally first and pushed
+    // after a short pause. Any failure leaves the page on local settings.
+    async syncPrefs() {
+      let d;
+      try {
+        const r = await fetch('/api/prefs', { credentials: 'same-origin', cache: 'no-store' });
+        if (!r.ok) return;
+        d = await r.json();
+      } catch (_) { return; }
+      if (!d.enabled || !this.account.user) return;
+      this.prefsSync = true;
+      if (d.prefs && this._pendingUid() !== String(this.account.user.id)) {
+        for (const k of SYNCED_KEYS) if (k in d.prefs) this.settings[k] = d.prefs[k];
+        this.saveSettings(false);
+        if (this.coordinates) this.calcPrayerTimes(this.coordinates.latitude, this.coordinates.longitude);
+      } else {
+        this._pushPrefs();
+      }
+    },
+    _pendingUid() {
+      try { return localStorage.getItem(PENDING_KEY); } catch (_) { return null; }
+    },
+    _setPending(on) {
+      try {
+        if (on) localStorage.setItem(PENDING_KEY, String(this.account.user.id));
+        else localStorage.removeItem(PENDING_KEY);
+      } catch (_) {}
+    },
+    _queuePrefsPush() {
+      if (!this.account.user) return;
+      this._pushSeq++;
+      this._setPending(true);
+      if (!this.prefsSync) return;   // syncPrefs sends it once the server answers
+      clearTimeout(this._pushTimer);
+      this._pushTimer = setTimeout(() => this._pushPrefs(), 1500);
+    },
+    _prefsPayload() {
+      const out = {};
+      for (const k of SYNCED_KEYS) {
+        let v = this.settings[k];
+        if (k.endsWith('Angle')) {
+          v = parseFloat(v);
+          if (!Number.isFinite(v) || v < 0 || v > 30) continue;
+        }
+        out[k] = v;
+      }
+      return out;
+    },
+    async _pushPrefs(keepalive = false) {
+      clearTimeout(this._pushTimer);
+      this._pushTimer = null;
+      const seq = this._pushSeq;
+      this._setPending(true);
+      try {
+        const r = await fetch('/api/prefs', {
+          method: 'PUT', credentials: 'same-origin', keepalive,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(this._prefsPayload()),
+        });
+        // 400 means the server will never take these values, so stop retrying them.
+        if ((r.ok || r.status === 400) && seq === this._pushSeq) this._setPending(false);
+      } catch (_) { /* offline: still pending, sent when back online or on the next visit */ }
     },
     recalculate() {
       this.saveSettings();

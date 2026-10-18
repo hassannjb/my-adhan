@@ -4,6 +4,8 @@ FastAPI backend for the Adhan Clock web app.
   GET  /api/chat              : answers a question as JSON (see assistant/router.py)
   GET  /api/status            : assistant health
   GET  /api/me                : who is signed in (optional; accounts live on searchthehadith.fyi)
+  GET  /api/prefs             : the signed-in user's saved settings (api/prefs.py)
+  PUT  /api/prefs             : replace them
   DELETE /api/session/{id}    : kept for older pages; there is no server-side session now
 
 The chat no longer uses an LLM: answers come from the curated assistant/faq.md,
@@ -26,6 +28,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 _ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -80,6 +83,7 @@ async def _revalidate_page_assets(request, call_next):
 from assistant import ratelimit  # noqa: E402
 
 _chat_limit = ratelimit.from_env()
+_prefs_limit = ratelimit.from_env("RATE_LIMIT_PREFS_PER_MIN")
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
@@ -140,18 +144,83 @@ def chat(
 # and sign-out live there (sunnah-toolkit, /auth/*); its session cookie is
 # scoped to .searchthehadith.fyi and signed with AUTH_SECRET, so this app can
 # read it with the same secret. Off when AUTH_SECRET is unset.
+def _signed_in(request: Request) -> dict | None:
+    """The verified cookie payload, or None when signed out or sign-in is off."""
+    secret = os.environ.get("AUTH_SECRET", "").strip()
+    if not secret:
+        return None
+    from api import session_cookie
+    raw = request.cookies.get(os.environ.get("AUTH_COOKIE_NAME", "").strip() or "sth_session")
+    payload = session_cookie.verify(raw, secret) if raw else None
+    return payload if payload and payload.get("email") else None
+
+
 @app.get("/api/me")
 def me(request: Request):
     secret = os.environ.get("AUTH_SECRET", "").strip()
     base = (os.environ.get("AUTH_BASE_URL", "").strip() or "https://searchthehadith.fyi").rstrip("/")
-    user = None
-    if secret:
-        from api import session_cookie
-        raw = request.cookies.get(os.environ.get("AUTH_COOKIE_NAME", "").strip() or "sth_session")
-        payload = session_cookie.verify(raw, secret) if raw else None
-        if payload and payload.get("email"):
-            user = {"id": payload.get("uid"), "email": payload["email"], "name": payload.get("name")}
+    payload = _signed_in(request)
+    user = {"id": payload.get("uid"), "email": payload["email"], "name": payload.get("name")} if payload else None
     return JSONResponse({"enabled": bool(secret), "user": user, "auth_base": base},
+                        headers={"Cache-Control": "no-store"})
+
+
+# Settings that follow a signed-in user between devices. Off when
+# PREFS_DB_PATH is unset; the page then keeps settings in the browser only.
+def _prefs_gate(request: Request) -> tuple[str | None, JSONResponse | None]:
+    """(uid, None) when the request may go ahead, else (None, the reply to send)."""
+    def reply(body, code, **headers):
+        return None, JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store", **headers})
+
+    from api import prefs
+    if not prefs.db_path():
+        return reply({"enabled": False, "error": "Settings sync is off on this server."},
+                     200 if request.method == "GET" else 503)
+    payload = _signed_in(request)
+    if not payload or payload.get("uid") is None:
+        return reply({"enabled": True, "error": "Sign in to save settings."}, 401)
+    uid = str(payload["uid"])
+    if _prefs_limit is not None:
+        wait = _prefs_limit.hit("u:" + uid)
+        if wait:
+            return reply({"error": f"Too many saves. Try again in {wait} seconds."}, 429,
+                         **{"Retry-After": str(wait)})
+    return uid, None
+
+
+@app.get("/api/prefs")
+def get_prefs(request: Request):
+    uid, refused = _prefs_gate(request)
+    if refused:
+        return refused
+    from api import prefs
+    saved, updated_at = prefs.load(prefs.db_path(), uid)
+    return JSONResponse({"enabled": True, "prefs": saved, "updated_at": updated_at},
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/prefs")
+async def put_prefs(request: Request):
+    from api import prefs
+    uid, refused = _prefs_gate(request)
+    if refused:
+        return refused
+    if not prefs.same_origin(request.headers):
+        return JSONResponse({"error": "Cross-site request refused."}, status_code=403)
+    body = b""
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > prefs.MAX_BYTES:
+            return JSONResponse({"error": "Settings too large."}, status_code=413)
+    try:
+        obj = json.loads(body or b"null")
+    except ValueError:
+        return JSONResponse({"error": "Body is not JSON."}, status_code=400)
+    problem = prefs.validate(obj)
+    if problem:
+        return JSONResponse({"error": problem}, status_code=400)
+    updated_at = await run_in_threadpool(prefs.save, prefs.db_path(), uid, obj)
+    return JSONResponse({"enabled": True, "prefs": obj, "updated_at": updated_at},
                         headers={"Cache-Control": "no-store"})
 
 

@@ -1,6 +1,7 @@
-"""Per-client limit on chat questions for the public instance.
+"""Per-client limits for the public instance: chat questions and saved settings.
 
-Off unless RATE_LIMIT_CHAT_PER_MIN is set (run-hf.sh on the MBP sets it).
+Off unless RATE_LIMIT_CHAT_PER_MIN (or RATE_LIMIT_PREFS_PER_MIN for
+/api/prefs) is set; run-hf.sh on the MBP sets them.
 The client is Cloudflare's CF-Connecting-IP, since behind the tunnel every
 request arrives from localhost. Counts live in memory only and are never
 logged; a restart forgiving everyone is fine.
@@ -49,8 +50,8 @@ def _env_int(name: str) -> int | None:
     return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 
-def from_env() -> SlidingWindow | None:
-    n = _env_int("RATE_LIMIT_CHAT_PER_MIN")
+def from_env(name: str = "RATE_LIMIT_CHAT_PER_MIN") -> SlidingWindow | None:
+    n = _env_int(name)
     return SlidingWindow(n) if n else None
 
 
