@@ -3,6 +3,7 @@ FastAPI backend for the Adhan Clock web app.
 
   GET  /api/chat              : answers a question as JSON (see assistant/router.py)
   GET  /api/status            : assistant health
+  GET  /api/me                : who is signed in (optional; accounts live on searchthehadith.fyi)
   DELETE /api/session/{id}    : kept for older pages; there is no server-side session now
 
 The chat no longer uses an LLM: answers come from the curated assistant/faq.md,
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -132,6 +134,25 @@ def chat(
                     followup=prev_obj is not None, latency_ms=(time.perf_counter() - t0) * 1000,
                     error=error)
     return reply
+
+
+# Optional sign-in, shared with the hadith search site. Accounts, sign-in pages
+# and sign-out live there (sunnah-toolkit, /auth/*); its session cookie is
+# scoped to .searchthehadith.fyi and signed with AUTH_SECRET, so this app can
+# read it with the same secret. Off when AUTH_SECRET is unset.
+@app.get("/api/me")
+def me(request: Request):
+    secret = os.environ.get("AUTH_SECRET", "").strip()
+    base = (os.environ.get("AUTH_BASE_URL", "").strip() or "https://searchthehadith.fyi").rstrip("/")
+    user = None
+    if secret:
+        from api import session_cookie
+        raw = request.cookies.get(os.environ.get("AUTH_COOKIE_NAME", "").strip() or "sth_session")
+        payload = session_cookie.verify(raw, secret) if raw else None
+        if payload and payload.get("email"):
+            user = {"id": payload.get("uid"), "email": payload["email"], "name": payload.get("name")}
+    return JSONResponse({"enabled": bool(secret), "user": user, "auth_base": base},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.delete("/api/session/{session_id}")
