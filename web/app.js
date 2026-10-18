@@ -7,6 +7,8 @@
  * TTS                       : Web Speech API (SpeechSynthesis)
  * Audio playback            : HTML5 Audio (files served from /audio/)
  * Chat assistant            : GET /api/chat  (JSON; curated answers, no LLM).
+ * Sign-in (optional)        : GET /api/me reads the searchthehadith.fyi cookie;
+ *                             signing in and out happens on that site.
  *                             Prayer times in chat are calculated here with the
  *                             same _getParams() as the clock, so they always agree.
  */
@@ -151,12 +153,32 @@ function adhanApp() {
     recognizing:      false,
     _recognition:     null,
 
+    // ── account ──────────────────────────────────────────────────────
+    account:     { enabled: false, user: null, authBase: '' },
+    showAccount: false,
+
     // ── init ─────────────────────────────────────────────────────────
     init() {
       this.loadSettings();
       this.detectLocation();
       setInterval(() => this.tick(), 1000);
       this.checkRagStatus();
+      this.loadAccount();
+    },
+
+    // ── account (optional; pages live on searchthehadith.fyi) ────────
+    async loadAccount() {
+      try {
+        const d = await fetch('/api/me', { credentials: 'same-origin' }).then(r => r.json());
+        this.account = { enabled: !!d.enabled, user: d.user || null, authBase: d.auth_base || '' };
+      } catch (_) { /* no sign-in then; the clock works without it */ }
+    },
+    returnHere() { return location.href; },
+    signInUrl() {
+      return `${this.account.authBase}/auth/login?return_to=${encodeURIComponent(location.href)}`;
+    },
+    accountUrl() {
+      return `${this.account.authBase}/auth/account?return_to=${encodeURIComponent(location.href)}`;
     },
 
     // ── settings persistence ─────────────────────────────────────────

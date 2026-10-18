@@ -59,6 +59,20 @@
     .btn-supr  { background: #d68910; }
     .btn-gear  { background: #3d4a5a; border: none; color: #fff; font-size: 1rem; padding: .3rem .65rem; border-radius: .3rem; cursor: pointer; }
     .btn-adhan:hover, .btn-gear:hover { filter: brightness(1.2); }
+    [x-cloak] { display: none !important; }
+
+    /* ── account (optional sign-in, shared with searchthehadith.fyi) ── */
+    .btn-account { background: #3d4a5a; border: none; color: #fff; font-size: .8rem; padding: .3rem .75rem;
+                   border-radius: .3rem; cursor: pointer; text-decoration: none; display: inline-block;
+                   max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+    .btn-account:hover { filter: brightness(1.2); color: #fff; }
+    .account-panel { width: 260px; font-size: .875rem; }
+    .account-panel .who { opacity: .7; font-size: .75rem; }
+    .account-panel .email { overflow-wrap: anywhere; }
+    .account-panel a, .account-panel button { display: block; width: 100%; text-align: left; background: none; border: none;
+                   color: #fff; padding: .35rem 0; text-decoration: none; font-size: .875rem; cursor: pointer; }
+    .account-panel a:hover, .account-panel button:hover { color: var(--blue); }
+    .account-panel form { margin: 0; }
 
     /* ── clock ── */
     .hijri-date { color: var(--gold); font-size: .95rem; }
@@ -165,7 +179,29 @@
     <button class="btn-adhan btn-stop" @click="stopAdhan()">■ Stop</button>
     <button class="btn-adhan btn-supr" @click="suppressAdhan()">🔉 Suppress</button>
 
-    <div class="ms-auto position-relative">
+    <div class="ms-auto d-flex align-items-center gap-2">
+    <div class="position-relative" x-show="account.enabled" x-cloak>
+      <a class="btn-account" x-show="!account.user" :href="signInUrl()">Sign in</a>
+      <template x-if="account.user">
+        <div>
+          <button class="btn-account" @click="showAccount = !showAccount"
+                  x-text="account.user.name || account.user.email"></button>
+          <div class="settings-panel account-panel" x-show="showAccount" x-transition @click.outside="showAccount = false">
+            <div class="who">Signed in as</div>
+            <div class="fw-semibold" x-show="account.user.name" x-text="account.user.name"></div>
+            <div class="email mb-2" x-text="account.user.email"></div>
+            <div class="prayer-divider"></div>
+            <a :href="accountUrl()">Account</a>
+            <form method="post" :action="account.authBase + '/auth/logout'">
+              <input type="hidden" name="return_to" :value="returnHere()">
+              <button type="submit">Sign out</button>
+            </form>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div class="position-relative">
       <button class="btn-gear" @click="showSettings = !showSettings">⚙</button>
 
       <div class="settings-panel" x-show="showSettings" x-transition @click.outside="showSettings = false">
@@ -206,6 +242,7 @@
           <option value="fajr">Fajr Special</option>
         </select>
       </div>
+    </div>
     </div>
   </div>
 
@@ -357,6 +394,6 @@
 
 <audio id="makkahAudio" src="/audio/makkah_adhan.mp3" preload="auto"></audio>
 <audio id="fajrAudio"   src="/audio/fajr.mp3?v=2"         preload="auto"></audio>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
